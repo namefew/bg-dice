@@ -52,15 +52,7 @@ class DiceModel(nn.Module):
 
 class CNN():
     def __init__(self):
-        self.train_transform = transforms.Compose([
-            transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
-            transforms.Lambda(self._normalize_lighting),  # 光照归一化
-            transforms.RandomRotation(degrees=10),  # 限制旋转角度
-            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+       
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),
@@ -69,9 +61,6 @@ class CNN():
         ])
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DiceModel(num_classes=7).to(self.device)
-        # 加载数据集
-        self.train_dataset = DiceDataset(root_dir='train/images', transform=self.train_transform, num_augmentations=1)
-        self.train_loader = DataLoader(self.train_dataset, batch_size=32, shuffle=True)
         # 初始化损失函数和优化器
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
@@ -100,7 +89,20 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model, train_loader, criterion, optimizer, scheduler, num_epochs=50):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50):
+         # 加载数据集
+        train_transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
+            transforms.Lambda(self._normalize_lighting),  # 光照归一化
+            transforms.RandomRotation(degrees=10),  # 限制旋转角度
+            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        train_dataset = DiceDataset(root_dir='train/images', transform=train_transform, num_augmentations=1)
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
         for epoch in range(num_epochs):
@@ -208,7 +210,7 @@ class CNN():
         self._visualize_transformed_images(self.train_dataset, num_samples=5)
 
         # 继续训练模型
-        self._train_model(self.model, self.train_loader, self.criterion, self.optimizer, self.scheduler, num_epochs=20)
+        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=20)
         # 保存模型
         torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
 
