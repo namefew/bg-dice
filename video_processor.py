@@ -240,9 +240,9 @@ class DiceVideoProcessor:
         save_frame_count = 0  # 记录总帧数
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        last_frame = None
+        last_frame = []
         last_dot = None
-        for i in range(0, total_frames, fps*30):
+        for i in range(0, total_frames, fps*10):
             cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, frame = cap.read()
             if not ret:
@@ -265,22 +265,26 @@ class DiceVideoProcessor:
                 continue
             if last_dot is None:
                 last_dot = dot
-                last_frame = frame
+                last_frame.append(frame)
                 continue
             if dot != last_dot:
-                output_path = f'{output_folder}/{dot}_{save_frame_count}_{i/fps}_{base}.jpg'
-                cv2.imwrite(output_path, last_frame)
-                save_frame_count = save_frame_count+1
+                for j in range(len( last_frame)):
+                    frame1 = last_frame[j]
+                    output_path = f'{output_folder}/{dot}_{i/fps}_{base}-{j}.jpg'
+                    cv2.imwrite(output_path, frame1)
+                last_frame.clear()
             elif dot == last_dot:
                 diff = cv2.absdiff(frame,last_frame)
                 gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
                 _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
                 non_zero_pixels = cv2.countNonZero(thresh)
                 if non_zero_pixels > 300:  # 假设100个像素的变化可以忽略
-                    output_path = f'{output_folder}/{dot}_{save_frame_count}_{i/fps}_{base}.jpg'
-                    cv2.imwrite(output_path, last_frame)
-                    save_frame_count = save_frame_count + 1
-            last_frame = frame
+                    for j in range(len( last_frame)):
+                        frame1 = last_frame[j]
+                        output_path = f'{output_folder}/{dot}_{i/fps}_{base}-{j}.jpg'
+                        cv2.imwrite(output_path, frame1)
+                    last_frame.clear()
+            last_frame.append(frame)
             last_dot = dot
         cap.release()
 

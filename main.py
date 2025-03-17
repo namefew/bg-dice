@@ -22,7 +22,7 @@ class DiceApp:
 
     def create_widgets(self):
         # URL输入框
-        self.url_label = ttk.Label(self.root, text="Enter Video URL:")
+        self.url_label = ttk.Label(self.root, text="输入视频地址:")
         self.url_label.grid(row=0, column=0, padx=10, pady=10)
         self.url_entry = ttk.Entry(self.root, textvariable=self.url_var, width=50)
         self.url_entry.grid(row=0, column=1, padx=10, pady=10)
@@ -36,7 +36,7 @@ class DiceApp:
         self.image_label.grid(row=1, column=0, columnspan=3, padx=10, pady=10)
 
         # 预测点数标签
-        self.dot_label = ttk.Label(self.root, text="Dot Count: ")
+        self.dot_label = ttk.Label(self.root, text="预测: ")
         self.dot_label.grid(row=2, column=0, columnspan=3, padx=10, pady=10)
 
     def start_processing(self):
@@ -65,8 +65,8 @@ class DiceApp:
             else:
                 self.stable_count+=1
                 if self.stable_count>100:
-                    dot = self.cnn.predict_image(frame)
-                    self.dot_label.config(text=f"下一个点数: {dot}")
+                    dot,confidence = self.cnn.predict_image(frame)
+                    self.dot_label.config(text=f"预测: {dot},置信度: {confidence:.4f}")
                     self.show_image(frame)
                     self.stable_count = 0
 

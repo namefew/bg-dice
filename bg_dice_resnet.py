@@ -103,7 +103,7 @@ class CNN():
         ])
          # 加载数据集
         train_dataset = DiceDataset(root_dir='train/new_images', transform=train_transform, num_augmentations=1)
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
         for epoch in range(num_epochs):
@@ -208,7 +208,7 @@ class CNN():
 
     def train(self,epochs=20):
         # 可视化增强后的图像
-        self._visualize_transformed_images(self.train_dataset, num_samples=5)
+        # self._visualize_transformed_images( num_samples=5)
 
         # 继续训练模型
         self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=epochs)
