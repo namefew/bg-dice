@@ -5,16 +5,18 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 from bg_dice_resnet import CNN
+import train_resnet
 
 class DiceApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Dice Video Processor")
         self.cnn = CNN()
+        self.dot_cnn= train_resnet.CNN()
         self.roi = [514, 134, 224, 224]
         self.save_frame_count = 0
         self.last_frame = None
-
+        self.running = False
         self.url_var = tk.StringVar()
 
         self.create_widgets()
@@ -41,11 +43,15 @@ class DiceApp:
 
     def start_processing(self):
         print('starting')
+        self.running = not self.running
+        self.start_button.config(text="Stop" if self.running else "Start")
         url = self.url_var.get()
         self.cap = cv2.VideoCapture(url)
         self.process_frame()
 
     def process_frame(self):
+        if not self.running:
+            return
         fps = self.cap.get(cv2.CAP_PROP_FPS)
         frames_to_skip = int(fps * 2)  # 每隔2秒跳过 frames_to_skip 帧
         for _ in range(frames_to_skip):
@@ -67,7 +73,8 @@ class DiceApp:
             else:
                 self.stable_count+=1
                 dot,confidence = self.cnn.predict_image(frame)
-                self.dot_label.config(text=f"预测: {dot},置信度: {confidence:.4f}")
+                current_dot,cf=self.dot_cnn.predict_image(frame)
+                self.dot_label.config(text=f"当前：{current_dot}预测: {dot}预测置信度: {confidence:.4f}")
                 self.show_image(frame)
                 self.stable_count = 0
 

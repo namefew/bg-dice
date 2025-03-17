@@ -106,8 +106,17 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+        train_transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
+            transforms.Lambda(self._normalize_lighting),  # 光照归一化
+            transforms.RandomRotation(degrees=10),  # 限制旋转角度
+            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
         # 加载数据集
-        train_dataset = DiceDataset(root_dir='train/new_images', transform=train_transform, num_augmentations=3)
+        train_dataset = DiceDataset(root_dir='train/new_images', transform=train_transform, num_augmentations=2)
         train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=4,pin_memory=True,prefetch_factor=2,persistent_workers=True)  # 增加 num_workers
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
@@ -238,7 +247,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = CNN()
-    cnn.train(epochs=20)
+    cnn.train(epochs=40)
     # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
