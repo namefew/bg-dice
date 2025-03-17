@@ -228,66 +228,65 @@ class DiceVideoProcessor:
             return hu_moments
         return np.zeros(7)
 
-    def process_video(self, video_path, roi=None, output_folder='train/new_images'):
-        """
-        处理整个视频，提取骰子状态序列
-        """
+    def process_video(self, video_path, roi=None,output_folder='train/new_images'):
+        """处理整个视频，提取骰子状态序列"""
+        # if self.background is None:
+        #     self._extract_background(video_path, roi=roi)
         video_filename = os.path.basename(video_path)
-        base_name = video_filename.split('.')[0]
+        base = video_filename.split('.')[0]
+        # output_folder = os.path.join(output_folder, video_filename.split('.')[0])
         os.makedirs(output_folder, exist_ok=True)
-
         cap = cv2.VideoCapture(video_path)
-        try:
-            fps = int(cap.get(cv2.CAP_PROP_FPS))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            previous_dice_value = None
-            current_frames = []
-            for frame_index in range(0, total_frames, fps * 10):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        save_frame_count = 0  # 记录总帧数
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        last_frame = []
+        last_dot = None
+        for i in range(0, total_frames, fps*10):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if roi is not None:
+                x, y, w, h = roi
+                frame = frame[y:y + h, x:x + w]
+            dot = self._recognize_dice_value(frame)
+            while dot==0:
+                i = i+100
+                cap.set(cv2.CAP_PROP_POS_FRAMES, i)
                 ret, frame = cap.read()
                 if not ret:
                     break
-                # 裁剪 ROI 区域
                 if roi is not None:
                     x, y, w, h = roi
                     frame = frame[y:y + h, x:x + w]
-
-                # 识别骰子点数
-                current_dice_value = self._recognize_dice_value(frame)
-                if current_dice_value is None or current_dice_value == 0:
-                    continue
-
-                # 检测骰子值变化
-                if previous_dice_value is None or current_dice_value != previous_dice_value:
-                    if current_frames:
-                        self.save_frames(current_frames, current_dice_value, frame_index, base_name, output_folder)
-                        current_frames.clear()
-
-                # 检测帧间变化
-                elif current_frames:
-                    if self.detect_frame_changes(frame, current_frames[-1]):
-                        self.save_frames(current_frames, current_dice_value, frame_index, base_name, output_folder)
-                        current_frames.clear()
-
-                current_frames.append(frame)
-                previous_dice_value = current_dice_value
-
-        finally:
-            cap.release()
-
-    def save_frames(self, frames, dice_value, frame_index, base_name, output_folder):
-        """保存帧到磁盘"""
-        for idx, frame in enumerate(frames):
-            output_path = f'{output_folder}/{dice_value}_{frame_index }_{base_name}-{idx}.jpg'
-            cv2.imwrite(output_path, frame)
-
-    def detect_frame_changes(self, current_frame, previous_frame):
-        """检测帧间变化"""
-        diff = cv2.absdiff(current_frame, previous_frame)
-        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
-        non_zero_pixels = cv2.countNonZero(thresh)
-        return non_zero_pixels > 300
+                dot = self._recognize_dice_value(frame)
+            if dot is None:
+                continue
+            if last_dot is None:
+                last_dot = dot
+                last_frame.append(frame)
+                continue
+            if dot != last_dot:
+                for j in range(len( last_frame)):
+                    frame1 = last_frame[j]
+                    output_path = f'{output_folder}/{dot}_{i/fps}_{base}-{j}.jpg'
+                    cv2.imwrite(output_path, frame1)
+                last_frame.clear()
+            elif dot == last_dot:
+                diff = cv2.absdiff(frame,last_frame)
+                gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+                _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
+                non_zero_pixels = cv2.countNonZero(thresh)
+                if non_zero_pixels > 300:  # 假设100个像素的变化可以忽略
+                    for j in range(len( last_frame)):
+                        frame1 = last_frame[j]
+                        output_path = f'{output_folder}/{dot}_{i/fps}_{base}-{j}.jpg'
+                        cv2.imwrite(output_path, frame1)
+                    last_frame.clear()
+            last_frame.append(frame)
+            last_dot = dot
+        cap.release()
 
     def _process_video(self, video_path, roi=None):
         """处理整个视频，提取骰子状态序列"""

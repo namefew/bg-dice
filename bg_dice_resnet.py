@@ -24,6 +24,7 @@ class DiceDataset(Dataset):
         self.transform = transform
         self.num_augmentations = num_augmentations
         self.images = [f for f in os.listdir(root_dir) if f.endswith('.jpg')]
+        self.cached_images = {}  # 缓存图像
 
     def __len__(self):
         return len(self.images) * self.num_augmentations
@@ -31,7 +32,14 @@ class DiceDataset(Dataset):
     def __getitem__(self, idx):
         original_idx = idx // self.num_augmentations
         img_path = os.path.join(self.root_dir, self.images[original_idx])
-        image = Image.open(img_path).convert('RGB')  # 使用 PIL.Image 打开图片
+        image = Image.open(img_path).convert('RGB')
+        # # 从缓存中读取图像，如果没有则从磁盘读取并缓存
+        # if img_path not in self.cached_images:
+        #     image = Image.open(img_path).convert('RGB')  # 使用 PIL.Image 打开图片
+        #     self.cached_images[img_path] = image
+        # else:
+        #     image = self.cached_images[img_path]
+
         label = int(self.images[original_idx].split('_')[0])  # 标签从0开始
 
         if self.transform:
@@ -63,7 +71,7 @@ class CNN():
         ])
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DiceModel(num_classes=7).to(self.device)
-          # 初始化损失函数和优化器
+        # 初始化损失函数和优化器
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
@@ -74,7 +82,6 @@ class CNN():
             logging.info(f"Loaded model weights from {weight_path}")
         else:
             logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
-
 
     def _normalize_lighting(self, image):
         image_np = np.array(image)
@@ -91,19 +98,17 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model,  criterion, optimizer, scheduler, num_epochs=50):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50):
         train_transform = transforms.Compose([
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),  # 光照归一化
-            # transforms.RandomRotation(degrees=10),  # 限制旋转角度
-            # transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
             transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-         # 加载数据集
-        train_dataset = DiceDataset(root_dir='train/new_images', transform=train_transform, num_augmentations=1)
-        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+        # 加载数据集
+        train_dataset = DiceDataset(root_dir='train/new_images', transform=train_transform, num_augmentations=3)
+        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True, num_workers=4,pin_memory=True,prefetch_factor=2,persistent_workers=True)  # 增加 num_workers
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
         for epoch in range(num_epochs):
@@ -206,9 +211,9 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self,epochs=20):
+    def train(self, epochs=20):
         # 可视化增强后的图像
-        # self._visualize_transformed_images( num_samples=5)
+        # self._visualize_transformed_images(num_samples=5)
 
         # 继续训练模型
         self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=epochs)

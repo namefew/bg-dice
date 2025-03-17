@@ -46,11 +46,13 @@ class DiceApp:
         self.process_frame()
 
     def process_frame(self):
-        ret, frame = self.cap.read()
-        if not ret:
-            self.cap.release()
-            return
-
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        frames_to_skip = int(fps * 2)  # 每隔2秒跳过 frames_to_skip 帧
+        for _ in range(frames_to_skip):
+            ret, frame = self.cap.read()
+            if not ret:
+                self.cap.release()
+                return
         x, y, w, h = self.roi
         frame = frame[y:y + h, x:x + w]
         if self.last_frame is None:
@@ -64,14 +66,13 @@ class DiceApp:
                 self.stable_count = 0
             else:
                 self.stable_count+=1
-                if self.stable_count>100:
-                    dot,confidence = self.cnn.predict_image(frame)
-                    self.dot_label.config(text=f"预测: {dot},置信度: {confidence:.4f}")
-                    self.show_image(frame)
-                    self.stable_count = 0
+                dot,confidence = self.cnn.predict_image(frame)
+                self.dot_label.config(text=f"预测: {dot},置信度: {confidence:.4f}")
+                self.show_image(frame)
+                self.stable_count = 0
 
         self.last_frame = frame
-        self.root.after(10, self.process_frame)
+        self.root.after(50, self.process_frame)
 
     def show_image(self, frame):
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
