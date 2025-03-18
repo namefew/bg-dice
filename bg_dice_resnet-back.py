@@ -10,9 +10,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import logging
 
-from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models import resnet18, ResNet18_Weights
 
-MODEL_RESNET_PTH = 'bg_model_resnet50.pth'
+MODEL_RESNET_PTH = 'bg_model_resnet.pth'
 
 # 设置日志记录
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,8 +33,14 @@ class DiceDataset(Dataset):
         original_idx = idx // self.num_augmentations
         img_path = os.path.join(self.root_dir, self.images[original_idx])
         image = Image.open(img_path).convert('RGB')
+        # # 从缓存中读取图像，如果没有则从磁盘读取并缓存
+        # if img_path not in self.cached_images:
+        #     image = Image.open(img_path).convert('RGB')  # 使用 PIL.Image 打开图片
+        #     self.cached_images[img_path] = image
+        # else:
+        #     image = self.cached_images[img_path]
+
         label = int(self.images[original_idx].split('_')[0])  # 标签从0开始
-        # label1 = int(self.images[original_idx].split('_')[1])  # 标签从0开始
 
         if self.transform:
             image = self.transform(image)
@@ -46,9 +52,11 @@ class DiceDataset(Dataset):
 class DiceModel(nn.Module):
     def __init__(self, num_classes=7):
         super(DiceModel, self).__init__()
-        self.resnet = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+        self.resnet = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         num_ftrs = self.resnet.fc.in_features
-        self.resnet.fc = nn.Linear(num_ftrs, num_classes)
+        for param in self.resnet.parameters():
+            param.requires_grad = False  # 冻结所有层
+        self.resnet.fc = nn.Linear(num_ftrs, num_classes)  # 仅训练最后一层
 
     def forward(self, x):
         return self.resnet(x)
@@ -59,9 +67,7 @@ class CNN():
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -69,9 +75,15 @@ class CNN():
         self.model = DiceModel(num_classes=7).to(self.device)
         # 初始化损失函数和优化器
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.0001)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.1)
-        # 检查权重文件是否存在
+        # 修改优化器配置（CNN类__init__中）
+        self.optimizer = optim.Adam(
+            [
+                {'params': self.model.resnet.fc.parameters(), 'lr': 1e-4}
+            ],
+            lr=1e-5  # 其他参数的默认学习率
+        )
+
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'max', patience=3)  # 根据准确率动态调整 检查权重文件是否存在
         weight_path = MODEL_RESNET_PTH
         if os.path.exists(weight_path):
             self.model.load_state_dict(torch.load(weight_path, map_location=self.device))
@@ -94,19 +106,39 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=100):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50):
         train_transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Lambda(self._normalize_lighting),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1),
+            transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
+            transforms.Lambda(self._normalize_lighting),  # 光照归一化
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        train_transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
+            transforms.Lambda(self._normalize_lighting),  # 光照归一化
+            transforms.RandomRotation(degrees=5),  # 限制旋转角度
+            transforms.RandomAffine(degrees=0, translate=(0, 0.1)),  # 只允许向下平移
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
         # 加载数据集
         train_dataset = DiceDataset(root_dir='train/new_images', transform=train_transform, num_augmentations=2)
-        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4, pin_memory=True, prefetch_factor=2, persistent_workers=True)
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=8,pin_memory=True,persistent_workers=True)  # 增加 num_workers
+        # 加载验证集
+        val_transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
+            transforms.Lambda(self._normalize_lighting),  # 光照归一化
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        val_dataset = DiceDataset(root_dir='train/val', transform=val_transform)
+        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=8, pin_memory=True,
+                                persistent_workers=True)
+
         model.train()
-        scaler = torch.amp.GradScaler('cuda' if self.device.type == 'cuda' else 'cpu')
+        scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
         for epoch in range(num_epochs):
             running_loss = 0.0
             correct = 0
@@ -132,10 +164,38 @@ class CNN():
             epoch_loss = running_loss / len(train_loader)
             epoch_acc = correct / total
             logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
-            scheduler.step()  # 更新学习率
+
+            # 验证集评估
+            model.eval()
+            val_correct = 0
+            val_total = 0
+
+            with torch.no_grad():
+                for val_images, val_labels in val_loader:
+                    val_images, val_labels = val_images.to(self.device), val_labels.to(self.device)
+                    val_outputs = model(val_images)
+                    _, val_predicted = torch.max(val_outputs.data, 1)
+                    val_total += val_labels.size(0)
+                    val_correct += (val_predicted == val_labels).sum().item()
+
+            val_acc = val_correct / val_total
+            logging.info(f'Validation Accuracy: {val_acc:.4f}')
+
+            # 更新学习率
+            scheduler.step(val_acc)
+
+            # 保存模型
+            torch.save(model.state_dict(), MODEL_RESNET_PTH)
 
     # 识别图片
     def predict_image_path(self, image_path: str):
+        """
+        参数:
+            image_path: 输入图像文件路径。
+        返回:
+            predicted_class: 预测的类别。
+            confidence: 预测的置信度。
+        """
         self.model.eval()
         image = Image.open(image_path).convert('RGB')
         image = self.transform(image).unsqueeze(0).to(self.device)
@@ -149,9 +209,19 @@ class CNN():
         return predicted_class, confidence
 
     def predict_image(self, image: np.ndarray):
+        """
+        预测给定图像的类别。
+        参数:
+            image: 输入图像的 NumPy 数组。
+        返回:
+            predicted_class: 预测的类别。
+            confidence: 预测的置信度。
+        """
         self.model.eval()
+        # 将 NumPy 数组转换为 PIL 图像
         image_pil = Image.fromarray(image.astype(np.uint8))
         image_pil = image_pil.convert('RGB')
+        # 应用数据变换
         image_tensor = self.transform(image_pil).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
@@ -175,6 +245,7 @@ class CNN():
             original_image = Image.open(img_path).convert('RGB')
             transformed_image, _ = dataset[i * dataset.num_augmentations]
 
+            # 反归一化
             transformed_image = transformed_image * std + mean
             transformed_image = transforms.ToPILImage()(transformed_image)
 
@@ -189,17 +260,24 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self, epochs=100):
+    def train(self, epochs=20):
+        # 可视化增强后的图像
+        # self._visualize_transformed_images(num_samples=5)
+
+        # 继续训练模型
         self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=epochs)
+        # 保存模型
         torch.save(self.model.state_dict(), MODEL_RESNET_PTH)
 
     def test(self):
+        # 识别 images 文件夹中 m_ 开头的图片
         image_dir = 'train/new_images'
         for filename in os.listdir(image_dir):
             if filename.endswith('.jpg'):
                 image_path = os.path.join(image_dir, filename)
                 predicted_class, confidence = self.predict_image_path(image_path)
                 logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
+                # if confidence > 0.90:
                 new_filename = f'{predicted_class }_{filename[2:]}'
                 new_image_path = os.path.join(image_dir, new_filename)
                 os.rename(image_path, new_image_path)

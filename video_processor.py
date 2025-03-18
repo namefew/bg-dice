@@ -52,19 +52,18 @@ class DiceVideoProcessor:
                 median = np.median(frames, axis=0).astype(np.uint8) if frames else None
 
         return median
-    def _extract_background(self, video_path, output_folder='images', num_frames=100, roi=None):
+    def _extract_background(self, video_path, output_folder='images', num_frames=20, roi=None):
         self._save_first_frame(video_path, output_folder)
         cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         num_frames = min(num_frames, total_frames)
-
         # 使用累积法代替全帧存储
         mean = None
         M2 = None
         frame_count = 0
-
         # 随机采样帧（减少重复区域影响）
-        step = max(1, total_frames // num_frames)
+        step = int(fps*35)
         frames = []
         for i in range(0, total_frames, step):
             cap.set(cv2.CAP_PROP_POS_FRAMES, i)
@@ -75,6 +74,8 @@ class DiceVideoProcessor:
                 x, y, w, h = roi
                 frame = frame[y:y + h, x:x + w]
             frames.append(frame)
+            if len(frames)>=num_frames:
+                break
         # 初始化mean和M2为全零数组
         if frames:
             first_frame = frames[0].astype(np.float32)
@@ -106,21 +107,22 @@ class DiceVideoProcessor:
 
 
     def detect_dice_state(self, frame):
+        predicted_class, confidence = self.cnn.predict_image(frame)
         dice_roi,region = self._extract_craps(frame)
         x, y, w, h = region
         if dice_roi is not None:
             # # 提取特征（位置、大小、角度等）
-            features = self._extract_features(dice_roi, x, y, w, h)
+            features = self._extract_features(dice_roi, x, y, w, h,predicted_class)
             return features
         return None
 
-    def _extract_features(self, dice_roi, x, y, w, h):
+    def _extract_features(self, dice_roi, x, y, w, h,predicted_class):
         """从骰子区域提取特征"""
         # 转为灰度图
         gray = cv2.cvtColor(dice_roi, cv2.COLOR_BGR2GRAY)
 
         # 检测骰子点数（简化版，实际需要更复杂的算法）
-        predicted_class, confidence = self.cnn.predict_image(dice_roi)
+
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         kernel = np.ones((3, 3), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
@@ -230,8 +232,8 @@ class DiceVideoProcessor:
 
     def process_video(self, video_path, roi=None,output_folder='train/new_images'):
         """处理整个视频，提取骰子状态序列"""
-        # if self.background is None:
-        #     self._extract_background(video_path, roi=roi)
+        if self.background is None:
+            self._extract_background(video_path, roi=roi)
         video_filename = os.path.basename(video_path)
         base = video_filename.split('.')[0]
         # output_folder = os.path.join(output_folder, video_filename.split('.')[0])
@@ -241,8 +243,11 @@ class DiceVideoProcessor:
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         last_frame = None
+        to_save_frame = None
         last_dot = None
-        for i in range(0, total_frames, fps*30):
+        cnt  = 0
+        changed=False
+        for i in range(0, total_frames, fps*5):
             cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, frame = cap.read()
             if not ret:
@@ -251,38 +256,35 @@ class DiceVideoProcessor:
                 x, y, w, h = roi
                 frame = frame[y:y + h, x:x + w]
             dot = self._recognize_dice_value(frame)
-            while dot==0:
-                i = i+100
-                cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if roi is not None:
-                    x, y, w, h = roi
-                    frame = frame[y:y + h, x:x + w]
-                dot = self._recognize_dice_value(frame)
-            if dot is None:
+            if dot==0 or dot is None:
                 continue
             if last_dot is None:
                 last_dot = dot
                 last_frame = frame
                 continue
             if dot != last_dot:
-                output_path = f'{output_folder}/{dot}_{save_frame_count}_{i/fps}_{base}.jpg'
-                cv2.imwrite(output_path, last_frame)
-                save_frame_count = save_frame_count+1
+                save_frame_count = self._save_image(base, dot, fps, i, last_frame, output_folder,save_frame_count)
             elif dot == last_dot:
                 diff = cv2.absdiff(frame,last_frame)
                 gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
                 _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
                 non_zero_pixels = cv2.countNonZero(thresh)
                 if non_zero_pixels > 300:  # 假设100个像素的变化可以忽略
-                    output_path = f'{output_folder}/{dot}_{save_frame_count}_{i/fps}_{base}.jpg'
-                    cv2.imwrite(output_path, last_frame)
-                    save_frame_count = save_frame_count + 1
+                    save_frame_count = self._save_image(base, dot, fps, i, last_frame, output_folder,save_frame_count)
             last_frame = frame
             last_dot = dot
         cap.release()
+
+    def _save_image(self, base, dot, fps, i, last_frame, output_folder, save_frame_count):
+        output_path = f'{output_folder}/{dot}_{save_frame_count}_{i / fps}_{base}.jpg'
+        dice_roi,region = self._extract_dice(last_frame)
+        if dice_roi is not None:
+            cv2.imwrite(output_path, dice_roi)
+        # else:
+        #     cv2.imwrite(output_path, last_frame)
+        # cv2.imwrite(output_path, last_frame)
+            save_frame_count = save_frame_count + 1
+        return save_frame_count
 
     def _process_video(self, video_path, roi=None):
         """处理整个视频，提取骰子状态序列"""
@@ -333,7 +335,20 @@ class DiceVideoProcessor:
         prev_pos = previous["position"]
         return np.sqrt((curr_pos[0] - prev_pos[0]) ** 2 + (curr_pos[1] - prev_pos[1]) ** 2)
 
-    def _extract_craps(self,frame):
+    def _extract_dice(self, frame):
+        """检测骰子的位置"""
+        if self.background is None:
+            raise ValueError("请先提取背景")
+        # 计算当前帧与背景的差异
+        diff = cv2.absdiff(frame, self.background)
+        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+
+        # 自适应直方图均衡化（CLAHE）
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray_diff)
+        return enhanced,None
+
+    def __extract_dice(self,frame):
         """检测骰子的位置"""
         if self.background is None:
             raise ValueError("请先提取背景")
@@ -383,13 +398,13 @@ class DiceVideoProcessor:
                 x, y, w, h = cv2.boundingRect(max_contour)
 
                 # 提取骰子区域
-                dice_roi = frame[y:y + h, x:x + w]
+                # dice_roi = frame[y:y + h, x:x + w]
                 # cv2.imwrite(f"output/dice_roi{time.time()}.jpg", dice_roi)
-                return dice_roi,(x,y,w,h)
-
+                # return dice_roi,(x,y,w,h)
+                return brightened,(x,y,w,h)
         return None,None
 
-    def _recognize_dice_value(self, frame,cnf=0.70):
+    def _recognize_dice_value(self, frame,cnf=0.60):
         """识别骰子点数"""
         # 这里需要实现骰子点数识别算法
         # 简化版：根据检测到的点数确定骰子值
