@@ -77,8 +77,8 @@ class DiceApp:
             else:
                 self.stable_count += 1
                 current_dot, cf = self.dot_cnn.predict_image(frame)
-                dot, confidence = self.cnn.predict_image(frame)
-                self.dot_label.config(text=f"当前：{current_dot}预测: {dot}预测置信度: {confidence:.4f}")
+                dot, confidence = self.cnn.predict_image_top3(frame)
+                self.dot_label.config(text=f"当前：{current_dot}预测: {dot}预测置信度: {confidence}")
                 self.show_image(frame)
                 self.stable_count = 0
 
@@ -92,60 +92,6 @@ class DiceApp:
         self.image_label.config(image=img)
         self.image_label.image = img
 
-    def capture_background_async(self):
-        background_thread = threading.Thread(target=self.capture_background, args=(self.cap,))
-        background_thread.start()
-
-    def capture_background(self, cap):
-        self.dot_label.config(text="正在获取背景...")
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frames_to_skip = int(fps * 5)
-        last_dot = None
-        frames = []
-        while len(frames) < 5:  # 收集5帧
-            # 每隔2秒跳过 frames_to_skip 帧
-            for _ in range(frames_to_skip):
-                ret, frame = cap.read()
-                if not ret:
-                    cap.release()
-                    return
-            x, y, w, h = self.roi
-            frame = frame[y:y + h, x:x + w]
-            current_dot, cf = self.dot_cnn.predict_image(frame)
-            if cf < 0.97:
-                continue
-            if last_dot is None:
-                last_dot = current_dot
-                frames.append(frame)
-                continue
-            if current_dot != last_dot:
-                frames.append(frame)
-                last_dot = current_dot
-            self.show_image(frame)
-
-        # 计算均值和标准差
-        mean = np.mean(frames, axis=0).astype(np.float32)
-        std_dev = np.std(frames, axis=0).astype(np.float32)
-
-        median_frame = np.median(frames, axis=0).astype(np.uint8)
-
-        # 背景融合策略
-        background = np.where(std_dev < 50, median_frame, mean).astype(np.uint8)
-        background = cv2.medianBlur(background, 5)
-        self.background = background
-        self.show_image(background)
-        self.dot_label.config(text="背景获取完成")
-
-    def select_background_image(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.jpeg *.png")])
-        if file_path:
-            self.background = cv2.imread(file_path)
-            if self.background is not None:
-                self.background = cv2.cvtColor(self.background, cv2.COLOR_BGR2RGB)
-                self.show_image(self.background)
-                self.dot_label.config(text="手动选择背景图片完成")
-            else:
-                self.dot_label.config(text="无法读取背景图片")
 
 if __name__ == "__main__":
     root = tk.Tk()

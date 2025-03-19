@@ -113,6 +113,7 @@ class CNN():
 
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
+        max_acc = 0
         for epoch in range(num_epochs):
             running_loss = 0.0
             correct = 0
@@ -139,7 +140,9 @@ class CNN():
             epoch_acc = correct / total
             logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
             scheduler.step()  # 更新学习率
-            torch.save(model.state_dict(), 'bg_model_resnet18.pth')
+            if epoch_acc > max_acc:
+                max_acc = epoch_acc
+                torch.save(model.state_dict(), 'bg_model_resnet18.pth')
     # 识别图片
     def predict_image_path(self, image_path: str):
         """
@@ -161,6 +164,25 @@ class CNN():
             confidence = probabilities[predicted_class]
         return predicted_class, confidence
 
+    def predict_image_top3(self, frame: np.ndarray):
+        self.model.eval()
+        # 将 NumPy 数组转换为 PIL 图像
+        image_pil = Image.fromarray(frame.astype(np.uint8))
+        image_pil = image_pil.convert('RGB')
+        # 应用数据变换
+        image_tensor = self.transform(image_pil).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model(image_tensor)
+            softmax = nn.Softmax(dim=1)
+            probabilities = softmax(outputs).squeeze().cpu().numpy()
+
+            # 获取前3个最大概率及其对应的类别
+            top3_prob, top3_class = torch.topk(torch.tensor(probabilities), 3)
+            top3_prob = top3_prob.numpy()
+            top3_class = top3_class.numpy()
+
+        return top3_class, top3_prob
 
     def predict_image(self, frame: np.ndarray):
         self.model.eval()
@@ -213,7 +235,7 @@ class CNN():
         # 继续训练模型
         self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs)
         # 保存模型
-        torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
+        # torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
 
     def test(self):
         # 识别 images 文件夹中 m_ 开头的图片
