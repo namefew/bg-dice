@@ -100,8 +100,8 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        train_dataset = DiceDataset(root_dir='train/images', transform=train_transform, num_augmentations=1)
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        train_dataset = DiceDataset(root_dir='train/images-2', transform=train_transform, num_augmentations=1)
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
         
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
@@ -131,6 +131,7 @@ class CNN():
             epoch_acc = correct / total
             logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
             scheduler.step()  # 更新学习率
+            torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
 
     # 识别图片
     def predict_image_path(self, image_path: str):
@@ -207,7 +208,7 @@ class CNN():
 
     def train(self):
         # 可视化增强后的图像
-        self._visualize_transformed_images(self.train_dataset, num_samples=5)
+        # self._visualize_transformed_images(self.train_dataset, num_samples=5)
 
         # 继续训练模型
         self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=20)
@@ -232,7 +233,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = CNN()
-    # cnn.train()
-    cnn.test()
+    cnn.train()
+    # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
