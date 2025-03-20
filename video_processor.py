@@ -274,6 +274,8 @@ class DiceVideoProcessor:
                 save_frame_count = self._save_image(base, dot,last_dot, fps, i, last_frame, output_folder,save_frame_count)
             elif dot == last_dot:
                 diff = cv2.absdiff(frame,last_frame)
+                # 忽略0-80像素高度的差异
+                diff[:80, :] = 0
                 gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
                 _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
                 non_zero_pixels = cv2.countNonZero(thresh)
@@ -290,6 +292,8 @@ class DiceVideoProcessor:
         elif last_dot is not None and dot+last_dot==7:
             cls=1
         output_path = f'{output_folder}/{cls}_{last_dot}-{dot}_{save_frame_count}_{i / fps}_{base}.jpg'
+        output_path = f'{output_folder}/{dot}_{save_frame_count}_{i / fps}_{base}.jpg'
+
         # dice_roi,region = self._extract_dice(last_frame)
         # if dice_roi is not None:
         #     cv2.imwrite(output_path, dice_roi)

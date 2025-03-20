@@ -38,8 +38,8 @@ def move_random_images(source_dir, target_dir, move_ratio=0.2):
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # 定义源目录和目标目录
-source_directory = 'train/new-images'
-target_directory = 'train/new-val'
+source_directory = 'train/new_images-0'
+target_directory = 'train/new_val-0'
 
 # 移动图片（这里设置移动20%的图片）
 move_random_images(source_directory, target_directory, move_ratio=0.2)

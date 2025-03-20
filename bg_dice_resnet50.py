@@ -209,7 +209,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = CNN()
-    cnn.train(epochs=20)
+    cnn.train(epochs=100)
     # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

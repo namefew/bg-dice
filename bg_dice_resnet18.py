@@ -75,12 +75,12 @@ class CNN():
         self.optimizer = optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=0.0001)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.01)
         # 检查权重文件是否存在
-        weight_path = 'bg_model_resnet18.pth'
-        if os.path.exists(weight_path):
-            self.model.load_state_dict(torch.load(weight_path, map_location=self.device))
-            logging.info(f"Loaded model weights from {weight_path}")
+        self.weight_path = 'bg_model_resnet18.pth'
+        if os.path.exists(self.weight_path):
+            self.model.load_state_dict(torch.load(self.weight_path, map_location=self.device))
+            logging.info(f"Loaded model weights from {self.weight_path}")
         else:
-            logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
+            logging.info(f"Model weights file {self.weight_path} not found. Starting with random weights.")
 
     def _normalize_lighting(self, image):
         image_np = np.array(image)
@@ -102,14 +102,16 @@ class CNN():
         train_transform = transforms.Compose([
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),  # 光照归一化
-            transforms.RandomRotation(degrees=10),  # 限制旋转角度
+            transforms.RandomRotation(degrees=5),  # 限制旋转角度
             transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
             transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        train_dataset = DiceDataset(root_dir='train/new_images-0', transform=train_transform, num_augmentations=1)
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        train_dataset = DiceDataset(root_dir='train/new_images-0', transform=train_transform, num_augmentations=3)
+        # train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True,
+                                  persistent_workers=True)  # 增加 num_workers
 
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
@@ -142,7 +144,7 @@ class CNN():
             scheduler.step()  # 更新学习率
             if epoch_acc > max_acc:
                 max_acc = epoch_acc
-                torch.save(model.state_dict(), 'bg_model_resnet18.pth')
+                torch.save(model.state_dict(), self.weight_path)
     # 识别图片
     def predict_image_path(self, image_path: str):
         """
@@ -164,7 +166,7 @@ class CNN():
             confidence = probabilities[predicted_class]
         return predicted_class, confidence
 
-    def predict_image_top3(self, frame: np.ndarray):
+    def predict_image_top(self, frame: np.ndarray,n=6):
         self.model.eval()
         # 将 NumPy 数组转换为 PIL 图像
         image_pil = Image.fromarray(frame.astype(np.uint8))
@@ -178,11 +180,11 @@ class CNN():
             probabilities = softmax(outputs).squeeze().cpu().numpy()
 
             # 获取前3个最大概率及其对应的类别
-            top3_prob, top3_class = torch.topk(torch.tensor(probabilities), 3)
-            top3_prob = top3_prob.numpy()
-            top3_class = top3_class.numpy()
+            topN_prob, topN_class = torch.topk(torch.tensor(probabilities), n)
+            topN_prob = topN_prob.numpy()
+            topN_class = topN_class.numpy()
 
-        return top3_class, top3_prob
+        return topN_class, topN_prob
 
     def predict_image(self, frame: np.ndarray):
         self.model.eval()

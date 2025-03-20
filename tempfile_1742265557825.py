@@ -1,65 +1,59 @@
 import os
-import shutil
-import re
+import random
+import cv2
+import torch
+import pandas as pd
 
-def parse_filename(filename):
-    """
-    解析文件名，提取 base 和 i/fps
-    """
-    match = re.match(r'(\d+)_(\d+)_(\d+\.\d+)_(.+)\.jpg', filename)
-    if match:
-        dot = int(match.group(1))
-        save_frame_count = int(match.group(2))
-        timestamp = float(match.group(3))
-        base = match.group(4)
-        return base, timestamp
-    return None, None
+# 定义文件夹路径
+folder_path = 'train\\new_images-0'
 
-def move_files(source_folder, target_folder):
-    """
-    移动符合条件的文件
-    """
-    if not os.path.exists(target_folder):
-        os.makedirs(target_folder)
+# 获取文件夹中的所有文件名
+files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
 
-    files = os.listdir(source_folder)
-    file_dict = {}
+# 随机选择一个文件
+if files:
+    random_file = random.choice(files)
+    image_path = os.path.join(folder_path, random_file)
+else:
+    print("文件夹为空")
+    exit()
 
-    # 解析文件名并分组
-    for file in files:
-        base, timestamp = parse_filename(file)
-        if base is not None and timestamp is not None:
-            if base not in file_dict:
-                file_dict[base] = []
-            file_dict[base].append((file, timestamp))
+print(f"随机选择的文件：{image_path}")
 
-    # 找出符合条件的文件并移动
-    for base, file_list in file_dict.items():
-        file_list.sort(key=lambda x: x[1])  # 按 timestamp 排序
-        i = 0
-        while i < len(file_list) - 1:
-            file1, timestamp1 = file_list[i]
-            file2, timestamp2 = file_list[i + 1]
-            if abs(timestamp2 - timestamp1) == 5:
-                source_path1 = os.path.join(source_folder, file1)
-                source_path2 = os.path.join(source_folder, file2)
-                target_path1 = os.path.join(target_folder, file1)
-                target_path2 = os.path.join(target_folder, file2)
-                try:
-                    shutil.move(source_path1, target_path1)
-                    shutil.move(source_path2, target_path2)
-                    print(f"Moved {file1} to {target_path1}")
-                    print(f"Moved {file2} to {target_path2}")
-                    # 从文件列表中移除已处理的文件
-                    file_list.pop(i + 1)
-                    file_list.pop(i)
-                except FileNotFoundError as e:
-                    print(f"Error moving files: {e}")
-            else:
-                i += 1
+# 加载图片
+img = cv2.imread(image_path)
+# img[:80,:]=0
+img = img[80:,:]
+# 转换为灰度图像
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-if __name__ == "__main__":
-    source_folder = 'train/new_images'
-    source_folder = 'C:/Users/fred/Desktop/new_images'
-    target_folder = 'C:/Users/fred/Desktop/fix_image'
-    move_files(source_folder, target_folder)
+# 高斯模糊以减少噪声
+blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+# 使用Canny边缘检测提取边缘
+edges = cv2.Canny(blurred, 50, 150)
+# 使用YOLOv5进行推理
+model = torch.hub.load('ultralytics/yolov5', 'yolov5m')
+# results = model(img)
+results = model(blurred)
+
+# 获取检测结果
+detections = results.pandas().xyxy[0]
+
+for _, detection in detections.iterrows():
+    x_min, y_min, x_max, y_max = map(int, detection[['xmin', 'ymin', 'xmax', 'ymax']])
+    cv2.rectangle(img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+
+    # 计算中心点
+    center_x = (x_min + x_max) // 2
+    center_y = (y_min + y_max) // 2
+    cv2.circle(img, (center_x, center_y), 5, (0, 0, 255), -1)
+
+    print(f"骰子中心点：({center_x}, {center_y})")
+
+# 显示结果
+cv2.imshow('Frame', img)
+# cv2.imshow('Blurred', blurred)
+# cv2.imshow('Edges', edges)
+cv2.waitKey(0)
+cv2.destroyAllWindows()

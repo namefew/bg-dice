@@ -66,7 +66,7 @@ class CNN():
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
         # 检查权重文件是否存在
-        weight_path = 'dice_model_resnet.pth'
+        weight_path = self.weight_path = 'dice_model_resnet.pth'
         if os.path.exists(weight_path):
             self.model.load_state_dict(torch.load(weight_path, map_location=self.device))
             logging.info(f"Loaded model weights from {weight_path}")
@@ -100,9 +100,9 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        train_dataset = DiceDataset(root_dir='train/images-2', transform=train_transform, num_augmentations=1)
+        train_dataset = DiceDataset(root_dir='train/images-2', transform=train_transform, num_augmentations=4)
         train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-        
+        max_acc = 0
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
         for epoch in range(num_epochs):
@@ -131,7 +131,9 @@ class CNN():
             epoch_acc = correct / total
             logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
             scheduler.step()  # 更新学习率
-            torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
+            if epoch_acc > max_acc:
+                max_acc = epoch_acc
+                torch.save(self.model.state_dict(), self.weight_path)
 
     # 识别图片
     def predict_image_path(self, image_path: str):
@@ -206,18 +208,18 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self):
+    def train(self,num_epochs=50):
         # 可视化增强后的图像
         # self._visualize_transformed_images(self.train_dataset, num_samples=5)
 
         # 继续训练模型
-        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=20)
+        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs)
         # 保存模型
-        torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
+
 
     def test(self):
         # 识别 images 文件夹中 m_ 开头的图片
-        image_dir = 'train/new_images'
+        image_dir = 'train/fix_image'
         for filename in os.listdir(image_dir):
             if filename.endswith('.jpg'):
                 image_path = os.path.join(image_dir, filename)
@@ -233,7 +235,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = CNN()
-    cnn.train()
-    # cnn.test()
+    # cnn.train()
+    cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
