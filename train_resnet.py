@@ -14,7 +14,12 @@ from torchvision.models import resnet18, ResNet18_Weights
 
 # 设置日志记录
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
+dice_classifier = None
+def get_cnn_instance():
+    global dice_classifier
+    if dice_classifier is None:
+        dice_classifier = CNN()
+    return dice_classifier
 # 定义数据集类
 class DiceDataset(Dataset):
     def __init__(self, root_dir, transform=None, num_augmentations=1):
@@ -49,6 +54,9 @@ class DiceModel(nn.Module):
     def forward(self, x):
         return self.resnet(x)
 
+    def extract_features(self, x):
+        # 提取第 n-1 层的特征向量
+        return self.resnet.layer4(self.resnet.layer3(self.resnet.layer2(self.resnet.layer1(self.resnet.conv1(x)))))
 
 class CNN():
     def __init__(self):
@@ -182,6 +190,24 @@ class CNN():
 
         return predicted_class, confidence
 
+    def extract_features_from_image(self, image: np.ndarray):
+        """
+        从 NumPy 数组提取特征向量。
+        参数:
+            image: 输入图像的 NumPy 数组。
+        返回:
+            features: 特征向量。
+        """
+        self.model.eval()
+        # 将 NumPy 数组转换为 PIL 图像
+        image_pil = Image.fromarray(image.astype(np.uint8))
+        image_pil = image_pil.convert('RGB')
+        # 应用数据变换
+        image_tensor = self.transform(image_pil).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            features = self.model.extract_features(image_tensor)
+        return features.squeeze().cpu().numpy()
     def _visualize_transformed_images(self, dataset, num_samples=4):
         fig, axes = plt.subplots(num_samples, 2, figsize=(10, 20))
         mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
@@ -234,7 +260,7 @@ class CNN():
 
 # 程序入口
 if __name__ == "__main__":
-    cnn = CNN()
+    cnn = get_cnn_instance()
     # cnn.train()
     cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')

@@ -1,13 +1,18 @@
-import logging
 
 import cv2
 import tkinter as tk
 from tkinter import ttk, filedialog
+
+import numpy as np
 from PIL import Image, ImageTk
-from bg_dice_resnet18 import CNN
+
+import bg_dice_resnet18
 from logger import Logger
 from online_video_processor import DiceOnlineVideoProcessor
 import pyautogui  # 导入 pyautogui 库
+
+NP = np
+
 
 class DiceApp:
     def __init__(self, root):
@@ -15,7 +20,7 @@ class DiceApp:
 
         self.root = root
         self.root.title("Dice Video Processor")
-        self.cnn = CNN()
+        self.cnn = bg_dice_resnet18.get_cnn_instance()
         self.roi = [514, 134, 224, 224]
         self.save_frame_count = 0
         self.last_second = None
@@ -59,6 +64,7 @@ class DiceApp:
             self.win = 0
             self.count = 0
             self.next = -1
+            self.last_second = None
         url = self.url_var.get()
         if self.running:
             self.processor.start_process(url)
@@ -66,12 +72,19 @@ class DiceApp:
             self.processor.stop_process()
 
     def process_frame(self,frame,second,dot,changed):
-        next_dot, confidence = self.cnn.predict_image_top(frame)
-        self.dot_label.config(text=f"{second}当前：{dot}预测: {next_dot}预测置信度: {confidence}")
+        predict_dots, confidences = self.cnn.predict_image_top(frame,background=self.processor.background)
+        next_dots = [int(pd % 6)+1 for pd in predict_dots]
+        rounded_confidences = np.around(confidences, decimals=4)
+        # 将数组转换为字符串
+        confidence_str = np.array2string(rounded_confidences, separator=', ',
+                                         formatter={'float_kind': lambda x: f"{x:.4f}"})
+        # 去掉数组的方括号
+        confidence_str = confidence_str.strip('[]')
+        self.dot_label.config(text=f"{second}当前：{dot}预测: {next_dots}预测置信度: {confidence_str}")
         self.show_image(frame)
-        if changed:
+        if changed and len(next_dots)>0:
             if self.last_second is None or second - self.last_second > 25:
-                next = int(next_dot[0])
+                next = int(next_dots[0])
                 if self.next>0:
                     if self.next == dot:
                         self.win += 4.75
@@ -85,9 +98,11 @@ class DiceApp:
                 self.last_second = second
                 self.count += 1
 
-
     def show_image(self, frame):
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # 使用 OpenCV 缩放图像到 640x640
+        frame_resized = cv2.resize(frame, (640, 640))
+
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(frame_rgb)
         img = ImageTk.PhotoImage(img)
         self.image_label.config(image=img)

@@ -1,5 +1,7 @@
 import os
 import time
+import traceback
+import random
 
 import cv2
 import numpy as np
@@ -16,7 +18,7 @@ class DiceOnlineVideoProcessor:
         self.cap = None
         self.fps = None
         self.roi = roi
-        self.dot_cnn = train_resnet.CNN()
+        self.dot_cnn = train_resnet.get_cnn_instance()
         self.last_dot = None
         self.last_frame = None
         self.last_second = None
@@ -105,27 +107,23 @@ class DiceOnlineVideoProcessor:
         if self.fps is None or self.fps <= 0:
             print("Invalid FPS value")
             return
-
         self.running = True
+        self.last_frame = None
+        self.last_dot = None
+
         # 启动一个线程去运行 process_video_with_ffmpeg 函数
         self.process_thread = threading.Thread(target=self.process_video)
         self.process_thread.start()
 
     def stop_process(self):
         self.running = False
-        if hasattr(self, 'process_thread') and self.process_thread.is_alive():
-            self.process_thread.join(timeout=5)  # 设置超时时间为5秒
-            if self.process_thread.is_alive():
-                self.logger.error("处理线程未能在5秒内停止，强制终止。")
-            else:
-                self.logger.info("处理线程已停止。")
         if self.cap is not None:
             self.cap.release()
             self.logger.info("视频捕获对象已释放。")
 
     def process_video(self):
         second = 0
-        n = 30
+        n = 25
         try:
             while self.running:
                 start = time.time()
@@ -158,6 +156,7 @@ class DiceOnlineVideoProcessor:
                 self.logger.info(f"{second}处理耗时：{(time.time() - end) * 100:.4f}ms")
         except Exception as e:
             self.logger.error(f"处理视频时发生异常: {str(e)}")
+            traceback.print_exc()
         finally:
             self.logger.info("处理线程结束。")
 
@@ -165,7 +164,7 @@ class DiceOnlineVideoProcessor:
         """处理每一秒采样的帧图像"""
         dot = self._recognize_dice_value(frame, 0.99)
         if dot is None or dot == 0:
-            return second-10
+            return second - random.randint(3, 10)
         if self.last_dot is None:
             self.last_dot = dot
             self.last_frame = frame
@@ -180,7 +179,7 @@ class DiceOnlineVideoProcessor:
             gray_diff[0:80, :] = 0
             _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
             non_zero_pixels = cv2.countNonZero(thresh)
-            if non_zero_pixels > 300:
+            if non_zero_pixels > 100:
                 changed = True
                 self.logger.info(f"Dice movement detected: last_dot={self.last_dot}, current_dot={dot}")
         for callback in self.next_frame_callbacks:
@@ -198,9 +197,25 @@ class DiceOnlineVideoProcessor:
     def calculate_background(self, frame, second, dot, changed):
         if self.background is not None:
             return
-        if changed:
-            self.background_frames.append(frame)
-        size = 10 if self.is_seekable else 100
+        if self.is_seekable:
+            total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            num_frames = min(200, total_frames)
+            step = total_frames//num_frames
+            for i in range(0, total_frames, step):
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+                ret, frame = self.cap.read()
+                if not ret:
+                    break
+                if self.roi is not None:
+                    x, y, w, h = self.roi
+                    frame = frame[y:y + h, x:x + w]
+                self.background_frames.append(frame)
+                if len(self.background_frames) >= num_frames:
+                    break
+        else:
+            if changed:
+                self.background_frames.append(frame)
+        size = 10
         if len(self.background_frames) >= size:
             # 计算均值和标准差
             frames = self.background_frames

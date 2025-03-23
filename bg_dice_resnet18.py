@@ -15,7 +15,12 @@ from torchvision.models import resnet18, ResNet18_Weights
 # 设置日志记录
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-
+dice_classifier = None
+def get_cnn_instance():
+    global dice_classifier
+    if dice_classifier is None:
+        dice_classifier = CNN()
+    return dice_classifier
 # 定义数据集类
 class DiceDataset(Dataset):
     def __init__(self, root_dir, transform=None, num_augmentations=1):
@@ -47,12 +52,12 @@ class DiceModel(nn.Module):
         num_ftrs = self.resnet.fc.in_features
         self.resnet.fc = nn.Linear(num_ftrs, num_classes)
 
-        # 冻结前 n-1 层参数
-        for name, param in self.resnet.named_parameters():
-            if name.startswith('fc'):
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+        # # 冻结前 n-1 层参数
+        # for name, param in self.resnet.named_parameters():
+        #     if name.startswith('fc'):
+        #         param.requires_grad = True
+        #     else:
+        #         param.requires_grad = False
 
     def forward(self, x):
         return self.resnet(x)
@@ -72,8 +77,10 @@ class CNN():
         # 初始化损失函数和优化器
         self.criterion = nn.CrossEntropyLoss()
         # 仅优化最后一层的参数
-        self.optimizer = optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=0.0001)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.01)
+        # self.optimizer = optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=0.0001)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)  # 添加L2正则化
+
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
         # 检查权重文件是否存在
         self.weight_path = 'bg_model_resnet18.pth'
         if os.path.exists(self.weight_path):
@@ -97,7 +104,7 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50,folder_path='train/images'):
         # 加载数据集
         train_transform = transforms.Compose([
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
@@ -108,7 +115,7 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        train_dataset = DiceDataset(root_dir='train/new_images-0', transform=train_transform, num_augmentations=3)
+        train_dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=1)
         # train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
         train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True,
                                   persistent_workers=True)  # 增加 num_workers
@@ -166,7 +173,7 @@ class CNN():
             confidence = probabilities[predicted_class]
         return predicted_class, confidence
 
-    def predict_image_top(self, frame: np.ndarray,n=6):
+    def predict_image_top(self, frame: np.ndarray,n=6,background=None):
         self.model.eval()
         # 将 NumPy 数组转换为 PIL 图像
         image_pil = Image.fromarray(frame.astype(np.uint8))
@@ -230,18 +237,18 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self, num_epochs=20):
+    def train(self, num_epochs=20,folder_path='train/images'):
         # 可视化增强后的图像
         # self._visualize_transformed_images(self.train_dataset, num_samples=5)
 
         # 继续训练模型
-        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs)
+        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs,folder_path=folder_path)
         # 保存模型
         # torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
 
     def test(self):
         # 识别 images 文件夹中 m_ 开头的图片
-        image_dir = 'train/new_images-0'
+        image_dir = 'train/new_images'
         for filename in os.listdir(image_dir):
             if filename.endswith('.jpg'):
                 image_path = os.path.join(image_dir, filename)
@@ -257,7 +264,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = CNN()
-    cnn.train(100)
+    cnn.train(num_epochs=100,folder_path='train/new-images')
     # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

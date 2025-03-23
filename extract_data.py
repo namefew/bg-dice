@@ -34,9 +34,10 @@ def main():
     flv_files = [f for f in folder.glob('**/*.flv') if f.is_file()]
     # 仅当前目录（不含子目录）：
     # flv_files = [f for f in folder.glob('*.flv') if f.is_file()]
-    for f in flv_files:
-        print(f"正在处理: {f.name}")
-        processor.process_video(str(f), roi=roi)  # 转换为字符串路径
+    for step in [7,13,19,25]:
+        for f in flv_files:
+            print(f"正在处理: {step}秒\t{f.name} ")
+            processor.process_video(str(f), roi=roi, step_second=step, output_folder='train/new-images')  # 转换为字符串路径
 
 
 if __name__ == "__main__":
