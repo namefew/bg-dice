@@ -164,7 +164,9 @@ class DiceOnlineVideoProcessor:
         """处理每一秒采样的帧图像"""
         dot = self._recognize_dice_value(frame, 0.99)
         if dot is None or dot == 0:
-            return second - random.randint(3, 10)
+            if self.is_seekable:
+                return second - random.randint(3, 10)
+            return second
         if self.last_dot is None:
             self.last_dot = dot
             self.last_frame = frame

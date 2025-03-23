@@ -1,6 +1,8 @@
 .venv/
 .idea/
 __pycache__/
+build/
+dist/
 **/*.log
 images*/
 **/*.png
