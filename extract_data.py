@@ -36,7 +36,7 @@ def main():
     # flv_files = [f for f in folder.glob('*.flv') if f.is_file()]
     for step in [7,13,19,25]:
         for f in flv_files:
-            print(f"正在处理: {step}秒\t{f.name} ")
+            print(f"正在处理: {step}秒\t{f.display_name} ")
             processor.process_video(str(f), roi=roi, step_second=step, output_folder='train/new-images')  # 转换为字符串路径
 
 
