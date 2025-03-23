@@ -3,6 +3,7 @@
 __pycache__/
 build/
 dist/
+yolov5/
 **/*.log
 images*/
 **/*.png
