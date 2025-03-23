@@ -123,7 +123,7 @@ class DiceOnlineVideoProcessor:
 
     def process_video(self):
         second = 0
-        n = 25
+        n = 25 if self.is_seekable else 7
         try:
             while self.running:
                 start = time.time()
