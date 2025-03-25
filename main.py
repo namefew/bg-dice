@@ -5,7 +5,7 @@ from tkinter import ttk, filedialog
 import numpy as np
 from PIL import Image, ImageTk
 
-import bg_dice_resnet18
+import bg_dice_predict_resnet18
 import dice_game
 from logger import Logger
 from online_video_processor import DiceOnlineVideoProcessor
@@ -16,7 +16,7 @@ class DiceApp:
 
         self.root = root
         self.root.title("Dice Video Processor")
-        self.cnn = bg_dice_resnet18.get_cnn_instance()
+        self.cnn = bg_dice_predict_resnet18.get_cnn_instance()
         self.roi = [514, 134, 224, 224]
         self.save_frame_count = 0
         self.last_second = None
@@ -71,7 +71,7 @@ class DiceApp:
 
     def process_frame(self, frame, second, current_dot, changed):
         predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background)
-        predict_next_dots = [int(pd % 6) + 1 for pd in predict_dots]
+        predict_next_dots = [int(pd) for pd in predict_dots]
         predict_confidences = np.around(confidences, decimals=4)
         # 将数组转换为字符串
         confidence_str = np.array2string(predict_confidences, separator=', ',
@@ -86,7 +86,7 @@ class DiceApp:
 
     def show_image(self, frame):
         # 使用 OpenCV 缩放图像到 640x640
-        frame_resized = cv2.resize(frame, (640, 640))
+        frame_resized = cv2.resize(frame, (320, 320))
 
         frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(frame_rgb)

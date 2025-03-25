@@ -12,10 +12,16 @@ import logging
 
 from torchvision.models import resnet50, ResNet50_Weights
 
-MODEL_RESNET_PTH = 'bg_model_resnet50.pth'
-
 # 设置日志记录
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+dice_classifier = None
+
+def get_cnn_instance():
+    global dice_classifier
+    if dice_classifier is None:
+        dice_classifier = CNN()
+    return dice_classifier
 
 # 定义数据集类
 class DiceDataset(Dataset):
@@ -24,7 +30,6 @@ class DiceDataset(Dataset):
         self.transform = transform
         self.num_augmentations = num_augmentations
         self.images = [f for f in os.listdir(root_dir) if f.endswith('.jpg')]
-        self.cached_images = {}  # 缓存图像
 
     def __len__(self):
         return len(self.images) * self.num_augmentations
@@ -32,36 +37,30 @@ class DiceDataset(Dataset):
     def __getitem__(self, idx):
         original_idx = idx // self.num_augmentations
         img_path = os.path.join(self.root_dir, self.images[original_idx])
-        image = Image.open(img_path).convert('RGB')
-        label = int(self.images[original_idx].split('_')[0])  # 标签从0开始
-        # label1 = int(self.images[original_idx].split('_')[1])  # 标签从0开始
+        image = Image.open(img_path).convert('RGB')  # 使用 PIL.Image 打开图片
+        label = int(self.images[original_idx].split('_')[0])-1  # 标签从0开始
 
         if self.transform:
             image = self.transform(image)
 
         return image, label
 
-
 # 定义模型
 class DiceModel(nn.Module):
-    def __init__(self, num_classes=7):
+    def __init__(self, num_classes=6):
         super(DiceModel, self).__init__()
-        self.resnet = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+        self.resnet = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
         num_ftrs = self.resnet.fc.in_features
         self.resnet.fc = nn.Linear(num_ftrs, num_classes)
 
     def forward(self, x):
         return self.resnet(x)
 
-
 class CNN():
     def __init__(self):
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomVerticalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -69,15 +68,21 @@ class CNN():
         self.model = DiceModel(num_classes=7).to(self.device)
         # 初始化损失函数和优化器
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.0001)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.1)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)  # 添加L2正则化
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
         # 检查权重文件是否存在
-        weight_path = MODEL_RESNET_PTH
-        if os.path.exists(weight_path):
-            self.model.load_state_dict(torch.load(weight_path, map_location=self.device))
-            logging.info(f"Loaded model weights from {weight_path}")
+        self.weight_path = 'bg_model_resnet50.pth'
+        if os.path.exists(self.weight_path):
+            # 加载预训练权重，忽略不匹配的权重
+            pretrained_dict = torch.load(self.weight_path, map_location=self.device)
+            model_dict = self.model.state_dict()
+            # 过滤掉不匹配的权重
+            pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and model_dict[k].shape == v.shape}
+            model_dict.update(pretrained_dict)
+            self.model.load_state_dict(model_dict, strict=False)
+            logging.info(f"Loaded model weights from {self.weight_path}")
         else:
-            logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
+            logging.info(f"Model weights file {self.weight_path} not found. Starting with random weights.")
 
     def _normalize_lighting(self, image):
         image_np = np.array(image)
@@ -94,19 +99,24 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=100):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50, folder_path='train/images'):
+        # 加载数据集
         train_transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Lambda(self._normalize_lighting),
-            transforms.ColorJitter(brightness=0.1, contrast=0.1),
+            transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
+            transforms.Lambda(self._normalize_lighting),  # 光照归一化
+            transforms.RandomRotation(degrees=5),  # 限制旋转角度
+            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        # 加载数据集
-        train_dataset = DiceDataset(root_dir='train/new_images', transform=train_transform, num_augmentations=2)
-        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4, pin_memory=True, prefetch_factor=2, persistent_workers=True)
+        train_dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=1)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True,
+                                  persistent_workers=True)  # 增加 num_workers
+
         model.train()
-        scaler = torch.amp.GradScaler('cuda' if self.device.type == 'cuda' else 'cpu')
+        scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
+        min_loss = 10000
         for epoch in range(num_epochs):
             running_loss = 0.0
             correct = 0
@@ -133,9 +143,19 @@ class CNN():
             epoch_acc = correct / total
             logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
             scheduler.step()  # 更新学习率
+            if epoch_loss < min_loss:
+                min_loss = epoch_loss
+                torch.save(model.state_dict(), self.weight_path)
 
     # 识别图片
     def predict_image_path(self, image_path: str):
+        """
+        参数:
+            image_path: 输入图像文件路径。
+        返回:
+            predicted_class: 预测的类别。
+            confidence: 预测的置信度。
+        """
         self.model.eval()
         image = Image.open(image_path).convert('RGB')
         image = self.transform(image).unsqueeze(0).to(self.device)
@@ -148,10 +168,32 @@ class CNN():
             confidence = probabilities[predicted_class]
         return predicted_class, confidence
 
-    def predict_image(self, image: np.ndarray):
+    def predict_image_top(self, frame: np.ndarray, n=6, background=None):
         self.model.eval()
-        image_pil = Image.fromarray(image.astype(np.uint8))
+        # 将 NumPy 数组转换为 PIL 图像
+        image_pil = Image.fromarray(frame.astype(np.uint8))
         image_pil = image_pil.convert('RGB')
+        # 应用数据变换
+        image_tensor = self.transform(image_pil).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model(image_tensor)
+            softmax = nn.Softmax(dim=1)
+            probabilities = softmax(outputs).squeeze().cpu().numpy()
+
+            # 获取前 n 个最大概率及其对应的类别
+            topN_prob, topN_class = torch.topk(torch.tensor(probabilities), n)
+            topN_prob = topN_prob.numpy()
+            topN_class = topN_class.numpy()+1
+
+        return topN_class, topN_prob
+
+    def predict_image(self, frame: np.ndarray):
+        self.model.eval()
+        # 将 NumPy 数组转换为 PIL 图像
+        image_pil = Image.fromarray(frame.astype(np.uint8))
+        image_pil = image_pil.convert('RGB')
+        # 应用数据变换
         image_tensor = self.transform(image_pil).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
@@ -162,7 +204,7 @@ class CNN():
             predicted_class = predicted.item()
             confidence = probabilities[predicted_class]
 
-        return predicted_class, confidence
+        return predicted_class+1, confidence
 
     def _visualize_transformed_images(self, dataset, num_samples=4):
         fig, axes = plt.subplots(num_samples, 2, figsize=(10, 20))
@@ -175,6 +217,7 @@ class CNN():
             original_image = Image.open(img_path).convert('RGB')
             transformed_image, _ = dataset[i * dataset.num_augmentations]
 
+            # 反归一化
             transformed_image = transformed_image * std + mean
             transformed_image = transforms.ToPILImage()(transformed_image)
 
@@ -189,18 +232,25 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self, epochs=100):
-        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=epochs)
-        torch.save(self.model.state_dict(), MODEL_RESNET_PTH)
+    def train(self, num_epochs=20,folder_path='train/images'):
+        # 可视化增强后的图像
+        # self._visualize_transformed_images(self.train_dataset, num_samples=5)
+
+        # 继续训练模型
+        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs,folder_path=folder_path)
+        # 保存模型
+        # torch.save(self.model.state_dict(), 'dice_model_resnet.pth')
 
     def test(self):
+        # 识别 images 文件夹中 m_ 开头的图片
         image_dir = 'train/new_images'
         for filename in os.listdir(image_dir):
             if filename.endswith('.jpg'):
                 image_path = os.path.join(image_dir, filename)
                 predicted_class, confidence = self.predict_image_path(image_path)
                 logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
-                new_filename = f'{predicted_class }_{filename[2:]}'
+                # if confidence > 0.90:
+                new_filename = f'{predicted_class}_{filename[2:]}'
                 new_image_path = os.path.join(image_dir, new_filename)
                 os.rename(image_path, new_image_path)
                 logging.info(f'Renamed to: {new_filename}')
@@ -209,7 +259,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = CNN()
-    cnn.train(epochs=100)
+    cnn.train(num_epochs=100,folder_path='train/new-images')
     # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
