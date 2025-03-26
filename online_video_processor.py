@@ -162,11 +162,16 @@ class DiceOnlineVideoProcessor:
 
     def next_frame(self, frame, second):
         """处理每一秒采样的帧图像"""
-        dot = self._recognize_dice_value(frame, 0.99)
-        if dot is None or dot == 0:
-            if self.is_seekable:
-                return second - random.randint(3, 10)
+        dot, cf = self.dot_cnn.predict_image(frame)
+        if cf<0.97:
+            self.logger.info(f"Detected dot:{dot} confidence {cf:.4f} too low ")
             return second
+        if dot == 0:
+            self.logger.info(f"Detected dot moving: {dot}")
+            if self.is_seekable:
+                return second + random.randint(2,4)
+            return second
+        self.logger.info(f"Detected dot {dot} confidence {cf:.4f}")
         if self.last_dot is None:
             self.last_dot = dot
             self.last_frame = frame
@@ -190,9 +195,10 @@ class DiceOnlineVideoProcessor:
         self.last_dot = dot
         return second
 
-    def _recognize_dice_value(self, frame, conf=0.99):
+    def _recognize_dice_value(self, frame, conf=0.97):
         dot, cf = self.dot_cnn.predict_image(frame)
         if cf < conf:
+            self.logger.info(f"置信度过低：{cf:.4f},{dot}")
             return None
         return dot
 
