@@ -30,28 +30,28 @@ class DiceApp:
     def create_widgets(self):
         # URL输入框
         self.url_label = ttk.Label(self.root, text="输入视频地址:")
-        self.url_label.grid(row=0, column=0, padx=10, pady=10)
+        self.url_label.grid(row=0, column=0, padx=10, pady=0)
         self.url_entry = ttk.Entry(self.root, textvariable=self.url_var, width=50)
-        self.url_entry.grid(row=0, column=1, padx=10, pady=10)
+        self.url_entry.grid(row=0, column=1, padx=10, pady=0)
 
         # 类型下拉框
         self.type_label = ttk.Label(self.root, text="类型:")
-        self.type_label.grid(row=0, column=3, padx=10, pady=10)
+        self.type_label.grid(row=1, column=0, padx=10, pady=0)
         self.type_combobox = ttk.Combobox(self.root, textvariable=self.type_var, values=['1子', '2子', '3子', '大/小', '单/双', '大/小&单/双'])
-        self.type_combobox.grid(row=0, column=4, padx=10, pady=10)
+        self.type_combobox.grid(row=1, column=1, padx=10, pady=0)
         self.type_combobox.current(0)  # 设置默认值为第一个选项
 
         # 开始按钮
         self.start_button = ttk.Button(self.root, text="Start", command=self.start_processing)
-        self.start_button.grid(row=0, column=5, padx=10, pady=10)
+        self.start_button.grid(row=1, column=2, padx=10, pady=10)
 
         # 图像显示区域
         self.image_label = ttk.Label(self.root)
-        self.image_label.grid(row=1, column=0, columnspan=6, padx=10, pady=10)
+        self.image_label.grid(row=2, column=0, columnspan=6, padx=10, pady=10)
 
         # 预测点数标签
         self.dot_label = ttk.Label(self.root, text="预测: ")
-        self.dot_label.grid(row=2, column=0, columnspan=6, padx=10, pady=10)
+        self.dot_label.grid(row=3, column=0, columnspan=6, padx=10, pady=10)
 
     def start_processing(self):
         if self.running:

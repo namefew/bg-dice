@@ -36,7 +36,7 @@ class DiceBet:
         self.bet_value = bet_value
         self.dot = None
     def __str__(self):
-        return f"{self.bet_type.display_name}-{self.bet_value} {'' if self.dot is None else f':[{self.dot}]-{self.result()}'}"
+        return f"{self.bet_type.display_name}"
 
     def check_result(self, dot):
         self.dot = dot

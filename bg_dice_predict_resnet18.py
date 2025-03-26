@@ -57,7 +57,14 @@ class DiceModel(nn.Module):
         num_ftrs = self.resnet.fc.in_features
 
         # 修改最后一层
-        self.resnet.fc = nn.Linear(num_ftrs, num_classes)
+        # self.resnet.fc = nn.Linear(num_ftrs, num_classes)
+
+        self.resnet.fc = nn.Sequential(
+            nn.Linear(num_ftrs, 512),  # 添加隐藏层
+            nn.ReLU(inplace=True),  # 激活函数
+            nn.Dropout(0.5),  # 添加Dropout防止过拟合
+            nn.Linear(512, num_classes)  # 最终输出层
+        )
 
     def forward(self, x):
         return self.resnet(x)
@@ -98,13 +105,19 @@ class CNN():
         # 检查权重文件是否存在
         weight_path = self.weight_path = 'bg_dice_predict_resnet18.pth'
         if os.path.exists(weight_path):
-            self.model.load_state_dict(torch.load(weight_path, map_location=self.device))
+            self.model.load_state_dict(torch.load(weight_path, map_location=self.device), strict=False )
             logging.info(f"Loaded model weights from {weight_path}")
-            # 冻结前 4 层，  保留 Layer3 和 Layer4 可训练
-            for i, child in enumerate(self.model.resnet.children()):
-                if i < 4:
-                    for param in child.parameters():
-                        param.requires_grad = False
+            # # 冻结前 6 层  #保留 Layer3 和 Layer4 可训练
+            # for i, child in enumerate(self.model.resnet.children()):
+            #     if i < 6:
+            #         for param in child.parameters():
+            #             param.requires_grad = False
+            # 冻结所有层除了fc
+            for name, param in self.model.resnet.named_parameters():
+                if 'fc' not in name:  # 关键修改点
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True  # 显式启用fc层
         else:
             logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
 
@@ -134,14 +147,18 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        dataset = DiceDataset(root_dir='train/new-images', transform=train_transform, num_augmentations=4)
+        dataset = DiceDataset(root_dir='train/new-images', transform=train_transform, num_augmentations=1)
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
         train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-        max_acc = 0
+        val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
+
         model.train()
+        # 添加最佳验证指标跟踪
+        best_val_acc = 0.0
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
+
         for epoch in range(num_epochs):
             running_loss = 0.0
             correct = 0
@@ -167,10 +184,41 @@ class CNN():
             epoch_loss = running_loss / len(train_loader)
             epoch_acc = correct / total
             logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
+            # ===== 验证阶段 =====
+            model.eval()
+            val_loss = 0.0
+            val_correct = 0
+            val_total = 0
+
+            with torch.no_grad():
+                for images, labels in val_loader:
+                    images, labels = images.to(self.device), labels.to(self.device)
+
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+
+                    val_loss += loss.item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    val_total += labels.size(0)
+                    val_correct += (predicted == labels).sum().item()
+
+            # 计算验证指标
+            val_epoch_loss = val_loss / len(val_loader)
+            val_epoch_acc = val_correct / val_total
+
+            # 记录日志（添加验证指标）
+            logging.info(f'Epoch [{epoch + 1}/{num_epochs}], '
+                         f'Train Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f} | '
+                         f'Val Loss: {val_epoch_loss:.4f}, Val Acc: {val_epoch_acc:.4f}')
+
+            # 根据验证指标保存最佳模型
+            if val_epoch_acc > best_val_acc:
+                best_val_acc = val_epoch_acc
+                torch.save(model.state_dict(), self.weight_path)
+                logging.info(f'New best model saved with val acc: {best_val_acc:.4f}')
+
             scheduler.step()  # 更新学习率
-            if epoch_acc > max_acc:
-                max_acc = epoch_acc
-                torch.save(self.model.state_dict(), self.weight_path)
+        torch.save(model.state_dict(), self.weight_path.replace('.pth','_last.pth'))
 
     # 识别图片
     def predict_image_path(self, image_path: str):
@@ -282,7 +330,7 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self, num_epochs=50):
+    def train(self, num_epochs=100):
         # 可视化增强后的图像
         # self._visualize_transformed_images(self.train_dataset, num_samples=5)
         # 添加数据分布可视化
@@ -319,7 +367,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    # cnn.train()  # 启用训练
-    cnn.test()
+    cnn.train()  # 启用训练
+    # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
