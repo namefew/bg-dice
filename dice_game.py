@@ -27,7 +27,7 @@ class BetType(Enum):
     def expectation(self,prediction_dict):
         sum_exp = 0
         for i in self.wind_dots:
-            sum_exp = prediction_dict.get(i) * (self.odds+1)
+            sum_exp += prediction_dict.get(i) * (self.odds+1)
         return sum_exp
 
 class DiceBet:
@@ -80,10 +80,10 @@ class DiceGame:
                             bets.append(DiceBet(member))
         else:
             for member in list(BetType):
-                if member.name in type:
+                if member.display_name in type:
                     exp = member.expectation(prediction_dict)
                     if exp >= min_exp:
-                        self.logger.info(f'{member} 期望：{exp}')
+                        self.logger.info(f'{member.display_name} 期望：{exp}')
                         bets.append(DiceBet(member))
 
         return bets
@@ -99,7 +99,7 @@ class DiceGame:
                     self.max_win = self.total_win
                 if self.min_win>self.total_win:
                     self.min_win = self.total_win
-                self.logger.info(f"{second}秒 结果:{current_dot} 下注:{[str(bet) for bet in self.current_bets]} 盈利:{result} 下注量:{self.total_bets} 总盈利:{self.total_win}  最高盈利:{self.max_win} 最低盈利:{self.min_win}")
+                self.logger.info(f"{second}秒 结果:{current_dot} 下注:{[str(bet) for bet in self.current_bets]} 盈利:{result:.2f} 下注量:{self.total_bets} 总盈利:{self.total_win:.2f}  最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f}")
             confidence_str = np.array2string(predict_confidences, separator=', ',
                                              formatter={'float_kind': lambda x: f"{x:.4f}"})
 

@@ -116,7 +116,7 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=4)
+        dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=1)
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
@@ -305,13 +305,13 @@ class CNN():
                 predicted_class, confidence = self.predict_image_path(image_path)
                 if confidence <0.99:
                     logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
-                # new_filename = f'{predicted_class }_{filename[2:]}'
-                new_filename = f'{filename[:1]}_{predicted_class }{filename[3:]}'
-                # new_image_path = os.path.join(image_dir, new_filename)
+                new_filename = f'{predicted_class }_{filename[2:]}'
+                # new_filename = f'{filename[:1]}_{predicted_class }{filename[3:]}'
+                new_image_path = os.path.join(image_dir, new_filename)
                 if new_filename==filename:
                     correct += 1
                     continue
-                # os.rename(image_path, new_image_path)
+                os.rename(image_path, new_image_path)
                 logging.info(f'need to renamed {filename} to: {new_filename}')
         logging.info(f'Accuracy: {correct / total:.4f}')
 
@@ -320,6 +320,6 @@ if __name__ == "__main__":
     cnn = get_cnn_instance()
     # cnn.train(num_epochs=50,folder_path = 'train/images-2')
 
-    cnn.test(image_dir='train/new-images')
+    cnn.test(image_dir='train/new_images')
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

@@ -78,6 +78,7 @@ class CNN():
     def __init__(self):
 
         self.transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),
             transforms.ToTensor(),
@@ -96,12 +97,19 @@ class CNN():
                 resnet_params.append(param)
 
         self.optimizer = optim.Adam([
-            {'params': [p for p in resnet_params if p.requires_grad], 'lr': 0.0001},
-            {'params': fc_params, 'lr': 0.005}
+            {'params': [p for p in resnet_params if p.requires_grad], 'lr': 0.00001},
+            {'params': fc_params, 'lr': 0.001}
         ])
 
 
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.5)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='max',
+            factor=0.5,
+            patience=3,
+            verbose=True
+        )
         # 检查权重文件是否存在
         weight_path = self.weight_path = 'bg_dice_predict_resnet18.pth'
         if os.path.exists(weight_path):
@@ -136,18 +144,19 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50, folder_path='train/new-images'):
         # 加载数据集
         train_transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),  # 光照归一化
-            transforms.RandomRotation(degrees=10),  # 限制旋转角度
-            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
+            # transforms.RandomRotation(degrees=10),  # 限制旋转角度
+            # transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
+            # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        dataset = DiceDataset(root_dir='train/new-images', transform=train_transform, num_augmentations=1)
+        dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=1)
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
@@ -217,7 +226,7 @@ class CNN():
                 torch.save(model.state_dict(), self.weight_path)
                 logging.info(f'New best model saved with val acc: {best_val_acc:.4f}')
 
-            scheduler.step()  # 更新学习率
+            scheduler.step(val_epoch_acc)  # 更新学习率
         torch.save(model.state_dict(), self.weight_path.replace('.pth','_last.pth'))
 
     # 识别图片
@@ -330,16 +339,16 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self, num_epochs=100):
+    def train(self, num_epochs=100,folder_path='train/new-images'):
         # 可视化增强后的图像
         # self._visualize_transformed_images(self.train_dataset, num_samples=5)
         # 添加数据分布可视化
-        label_counts = Counter([int(f.split('_')[0]) for f in os.listdir('train/new-images')])
+        label_counts = Counter([int(f.split('_')[0]) for f in os.listdir(folder_path)])
         plt.bar(label_counts.keys(), label_counts.values())
         plt.title('Class Distribution')
         plt.show()
         # 继续训练模型
-        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs)
+        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs,folder_path=folder_path)
         # 保存模型
 
     def test(self):
@@ -367,7 +376,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    cnn.train()  # 启用训练
+    cnn.train(num_epochs=100,folder_path='train/new-images')  # 启用训练
     # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

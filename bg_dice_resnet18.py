@@ -1,4 +1,5 @@
 from collections import Counter
+import random
 
 import cv2
 import torch
@@ -68,6 +69,7 @@ class CNN():
     def __init__(self):
 
         self.transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),
             transforms.ToTensor(),
@@ -77,12 +79,17 @@ class CNN():
         self.model = DiceModel(num_classes=6).to(self.device)
         # 初始化损失函数和优化器
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.0001)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.2)
         # 检查权重文件是否存在
         weight_path = self.weight_path = 'bg_dice_resnet18.pth'
         if os.path.exists(weight_path):
             self.model.load_state_dict(torch.load(weight_path, map_location=self.device))
+            # 仅训练最后两层 + 全连接层
+            for name, param in self.model.named_parameters():
+                if 'layer4' not in name and 'fc' not in name:
+                    param.requires_grad = False
+            # 小学习率微调
             logging.info(f"Loaded model weights from {weight_path}")
         else:
             logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
@@ -102,9 +109,10 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50,folder_path='train/new-images'):
         # 加载数据集
         train_transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),  # 光照归一化
             transforms.RandomRotation(degrees=10),  # 限制旋转角度
@@ -113,8 +121,9 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        train_dataset = DiceDataset(root_dir='train/new-images', transform=train_transform, num_augmentations=4)
+        train_dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=4)
         train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+        self._visualize_transformed_images(train_dataset, num_samples=4)
         max_acc = 0
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
@@ -220,7 +229,7 @@ class CNN():
         std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
 
         for i in range(num_samples):
-            original_idx = i // dataset.num_augmentations
+            original_idx = random.randint(0, len(dataset) - 1) // dataset.num_augmentations
             img_path = os.path.join(dataset.root_dir, dataset.images[original_idx])
             original_image = Image.open(img_path).convert('RGB')
             transformed_image, _ = dataset[i * dataset.num_augmentations]
@@ -240,20 +249,20 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self, num_epochs=50):
+    def train(self, num_epochs=50,folder_path='train/new-images'):
         # 可视化增强后的图像
-        # self._visualize_transformed_images(self.train_dataset, num_samples=5)
-        label_counts = Counter([int(f.split('_')[0]) for f in os.listdir('train/new-images')])
+        label_counts = Counter([int(f.split('_')[0]) for f in os.listdir(folder_path)])
         plt.bar(label_counts.keys(), label_counts.values())
         plt.title('Class Distribution')
         plt.show()
         # 继续训练模型
-        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs)
+        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs,folder_path=folder_path)
         # 保存模型
 
-    def test(self):
+    def test(self,image_dir = 'train/images-2'):
         # 识别 images 文件夹中 m_ 开头的图片
-        image_dir = 'train/images-2'
+        error_dir= 'train/error'
+        os.makedirs(error_dir,exist_ok=True)
         total = 0
         correct = 0
         for filename in os.listdir(image_dir):
@@ -262,12 +271,14 @@ class CNN():
                 image_path = os.path.join(image_dir, filename)
                 predicted_class, confidence = self.predict_image_path(image_path)
                 logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
-                # if confidence > 0.90:
+                if confidence < 0.90:
+                    new_image_path = os.path.join('train/error',filename)
+                    os.rename(image_path, new_image_path)
                 new_filename = f'{predicted_class+1}_{filename[2:]}'
                 if filename==new_filename:
                     correct+=1
                     continue
-                new_image_path = os.path.join(image_dir, new_filename)
+                new_image_path = os.path.join(error_dir, new_filename)
                 # os.rename(image_path, new_image_path)
                 logging.info(f'Renamed to: {new_filename}')
         logging.info(f'Accuracy: {correct}/{total} = {correct/total:.4f}')
@@ -276,7 +287,8 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    cnn.train()
-    # cnn.test()
+
+    cnn.train(num_epochs=20,folder_path='train/new-images')
+    # cnn.test(image_dir='train/new_images')
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
