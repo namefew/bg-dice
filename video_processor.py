@@ -260,8 +260,8 @@ class DiceVideoProcessor:
 
     def process_video(self, video_path, roi=None,output_folder='train/images',step_second=17):
         """处理整个视频，提取骰子状态序列"""
-        if self.background is None:
-            self._extract_background(video_path, roi=roi)
+        # if self.background is None:
+        #     self._extract_background(video_path, roi=roi)
         video_filename = os.path.basename(video_path)
         base, _ = os.path.splitext(video_filename)
         # output_folder = os.path.join(output_folder, video_filename.split('.')[0])
@@ -286,6 +286,7 @@ class DiceVideoProcessor:
                 cnt +=1
                 if cnt>=3:
                     last_frame=None
+                    last_dot = None
                 continue
             else:
                 cnt = 0
