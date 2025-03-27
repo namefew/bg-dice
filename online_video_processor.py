@@ -28,6 +28,8 @@ class DiceOnlineVideoProcessor:
         self.logger = logger
         self.total_frames = None
         self.add_next_frame_callback(self.calculate_background)
+        self.image_dir = "images/unsure"
+        os.makedirs(self.image_dir, exist_ok=True)
 
     def add_next_frame_callback(self, callback):
         """添加 next_frame 回调函数"""
@@ -122,8 +124,9 @@ class DiceOnlineVideoProcessor:
             self.logger.info("视频捕获对象已释放。")
 
     def process_video(self):
+        self.logger.info(f"视频处理线程已启动,url: {self.url}")
         second = 0
-        n = 25 if self.is_seekable else 7
+        n = 15 if self.is_seekable else 7
         try:
             while self.running:
                 start = time.time()
@@ -145,8 +148,13 @@ class DiceOnlineVideoProcessor:
                 ret, frame = self.cap.retrieve()
                 if not ret:
                     print("Failed to read frame")
-                    self.stop_process()
-                    return
+                    if self.is_seekable:
+                        self.stop_process()
+                        return
+                    else:
+                        self.logger.info("视频流已结束，尝试重新连接...")
+                        self.start_process(self.url)
+                        return
                 end = time.time()
                 self.logger.info(f"{second}解码耗时：{(end-start)*100:.4f}ms")
                 if self.roi is not None:
@@ -163,13 +171,14 @@ class DiceOnlineVideoProcessor:
     def next_frame(self, frame, second):
         """处理每一秒采样的帧图像"""
         dot, cf = self.dot_cnn.predict_image(frame)
-        if cf<0.97:
-            self.logger.info(f"Detected dot:{dot} confidence {cf:.4f} too low ")
-            return second
         if dot == 0:
             self.logger.info(f"Detected dot moving: {dot}")
             if self.is_seekable:
                 return second + random.randint(2,4)
+            return second
+        if cf<0.97:
+            self.logger.info(f"Detected dot:{dot} confidence {cf:.4f} too low ")
+            cv2.imwrite(f"{self.image_dir}/{dot}_{second}_{cf:.4f}.jpg", frame)
             return second
         self.logger.info(f"Detected dot {dot} confidence {cf:.4f}")
         if self.last_dot is None:

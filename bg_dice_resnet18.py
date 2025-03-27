@@ -1,3 +1,5 @@
+from collections import Counter
+
 import cv2
 import torch
 import torch.nn as nn
@@ -21,12 +23,6 @@ def get_cnn_instance():
     if dice_classifier is None:
         dice_classifier = CNN()
     return dice_classifier
-def get_cnn_instance():
-    global dice_classifier
-    if dice_classifier is None:
-        dice_classifier = CNN()
-    return dice_classifier
-
 
 # 定义数据集类
 class DiceDataset(Dataset):
@@ -247,7 +243,10 @@ class CNN():
     def train(self, num_epochs=50):
         # 可视化增强后的图像
         # self._visualize_transformed_images(self.train_dataset, num_samples=5)
-
+        label_counts = Counter([int(f.split('_')[0]) for f in os.listdir('train/new-images')])
+        plt.bar(label_counts.keys(), label_counts.values())
+        plt.title('Class Distribution')
+        plt.show()
         # 继续训练模型
         self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs)
         # 保存模型
@@ -277,7 +276,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    # cnn.train()
-    cnn.test()
+    cnn.train()
+    # cnn.test()
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

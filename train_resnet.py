@@ -1,3 +1,5 @@
+from collections import Counter
+
 import cv2
 import torch
 import torch.nn as nn
@@ -62,6 +64,7 @@ class CNN():
     def __init__(self):
        
         self.transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),
             transforms.ToTensor(),
@@ -71,8 +74,12 @@ class CNN():
         self.model = DiceModel(num_classes=7).to(self.device)
         # 初始化损失函数和优化器
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.0005)
+        # 修改为：
+        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-4)  # 降低初始学习率
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'max', patience=3, factor=0.1, verbose=True)  # 根据验证准确率调整
+        # self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.2)
+
         # 检查权重文件是否存在
         weight_path = self.weight_path = 'dice_model_resnet.pth'
         if os.path.exists(weight_path):
@@ -97,9 +104,10 @@ class CNN():
         return Image.fromarray((noisy_image * 255).astype(np.uint8))
 
     # 训练模型
-    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50):
+    def _train_model(self, model, criterion, optimizer, scheduler, num_epochs=50,folder_path='train/images-2'):
          # 加载数据集
         train_transform = transforms.Compose([
+            transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),  # 光照归一化
             transforms.RandomRotation(degrees=10),  # 限制旋转角度
@@ -108,9 +116,13 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        train_dataset = DiceDataset(root_dir='train/images-2', transform=train_transform, num_augmentations=4)
+        dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=4)
+        train_size = int(0.8 * len(dataset))
+        val_size = len(dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
         train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-        max_acc = 0
+        val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
+        best_val_acc = 0.0
         model.train()
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
         for epoch in range(num_epochs):
@@ -127,6 +139,8 @@ class CNN():
                     loss = criterion(outputs, labels)
 
                 scaler.scale(loss).backward()
+
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 新增梯度裁剪
                 scaler.step(optimizer)
                 scaler.update()
 
@@ -138,10 +152,43 @@ class CNN():
             epoch_loss = running_loss / len(train_loader)
             epoch_acc = correct / total
             logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
-            scheduler.step()  # 更新学习率
-            if epoch_acc > max_acc:
-                max_acc = epoch_acc
-                torch.save(self.model.state_dict(), self.weight_path)
+
+            # ===== 验证阶段 =====
+            model.eval()
+            
+            val_loss = 0.0
+            val_correct = 0
+            val_total = 0
+
+            with torch.no_grad():
+                for images, labels in val_loader:
+                    images, labels = images.to(self.device), labels.to(self.device)
+
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+
+                    val_loss += loss.item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    val_total += labels.size(0)
+                    val_correct += (predicted == labels).sum().item()
+
+            # 计算验证指标
+            val_epoch_loss = val_loss / len(val_loader)
+            val_epoch_acc = val_correct / val_total
+            # 记录日志（添加验证指标）
+            logging.info(f'Epoch [{epoch + 1}/{num_epochs}], '
+                         f'Train Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f} | '
+                         f'Val Loss: {val_epoch_loss:.4f}, Val Acc: {val_epoch_acc:.4f}')
+
+            # 根据验证指标保存最佳模型
+            if val_epoch_acc > best_val_acc:
+                best_val_acc = val_epoch_acc
+                torch.save(model.state_dict(), self.weight_path)
+                logging.info(f'New best model saved with val acc: {best_val_acc:.4f}')
+
+            # scheduler.step()  # 更新学习率 #StepLR是按固定周期调整，而ReduceLROnPlateau依赖于某个指标的变化
+
+            scheduler.step(val_epoch_acc)
 
     # 识别图片
     def predict_image_path(self, image_path: str):
@@ -234,34 +281,45 @@ class CNN():
         plt.tight_layout()
         plt.show()
 
-    def train(self,num_epochs=50):
+    def train(self,num_epochs=50,folder_path = 'train/images-2'):
         # 可视化增强后的图像
         # self._visualize_transformed_images(self.train_dataset, num_samples=5)
 
+        label_counts = Counter([int(f.split('_')[0]) for f in os.listdir(folder_path)])
+        plt.bar(label_counts.keys(), label_counts.values())
+        plt.title('Class Distribution')
+        plt.show()
         # 继续训练模型
-        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs)
+        self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs,folder_path=folder_path)
         # 保存模型
 
 
-    def test(self):
+    def test(self,image_dir='images3'):
         # 识别 images 文件夹中 m_ 开头的图片
-        image_dir = 'train/fix_image'
+        correct = 0
+        total = 0
         for filename in os.listdir(image_dir):
             if filename.endswith('.jpg'):
+                total += 1
                 image_path = os.path.join(image_dir, filename)
                 predicted_class, confidence = self.predict_image_path(image_path)
-                logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
-                # if confidence > 0.90:
-                new_filename = f'{predicted_class }_{filename[2:]}'
-                new_image_path = os.path.join(image_dir, new_filename)
-                os.rename(image_path, new_image_path)
-                logging.info(f'Renamed to: {new_filename}')
-
+                if confidence <0.99:
+                    logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
+                # new_filename = f'{predicted_class }_{filename[2:]}'
+                new_filename = f'{filename[:1]}_{predicted_class }{filename[3:]}'
+                # new_image_path = os.path.join(image_dir, new_filename)
+                if new_filename==filename:
+                    correct += 1
+                    continue
+                # os.rename(image_path, new_image_path)
+                logging.info(f'need to renamed {filename} to: {new_filename}')
+        logging.info(f'Accuracy: {correct / total:.4f}')
 
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    cnn.train()
-    # cnn.test()
+    # cnn.train(num_epochs=50,folder_path = 'train/images-2')
+
+    cnn.test(image_dir='train/new-images')
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
