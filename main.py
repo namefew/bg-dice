@@ -5,7 +5,7 @@ from tkinter import ttk, filedialog
 import numpy as np
 from PIL import Image, ImageTk
 
-import bg_dice_predict_big_small
+import bg_dice_predict_resnet18
 import dice_game
 from logger import Logger
 from online_video_processor import DiceOnlineVideoProcessor
@@ -16,7 +16,7 @@ class DiceApp:
 
         self.root = root
         self.root.title("Dice Video Processor")
-        self.cnn = bg_dice_predict_big_small.get_cnn_instance()
+        self.cnn = bg_dice_predict_resnet18.get_cnn_instance()
         self.roi = [514, 134, 224, 224]
         self.save_frame_count = 0
         self.last_second = None

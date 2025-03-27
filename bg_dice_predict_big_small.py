@@ -96,15 +96,15 @@ class CNN():
             else:
                 resnet_params.append(param)
 
-        # self.optimizer = optim.Adam([
-        #     {'params': [p for p in resnet_params if p.requires_grad], 'lr': 0.0001},
-        #     {'params': fc_params, 'lr': 0.001}
-        # ])
-        self.optimizer = optim.AdamW(
-            self.model.parameters(),
-            lr=2e-4,  # 适当提高初始学习率
-            weight_decay=1e-4  # 增加权重衰减
-        )
+        self.optimizer = optim.Adam([
+            {'params': [p for p in resnet_params if p.requires_grad], 'lr': 0.0001},
+            {'params': fc_params, 'lr': 0.001}
+        ])
+        # self.optimizer = optim.AdamW(
+        #     self.model.parameters(),
+        #     lr=2e-4,  # 适当提高初始学习率
+        #     weight_decay=1e-4  # 增加权重衰减
+        # )
 
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
         # self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -117,7 +117,7 @@ class CNN():
         # 改用CosineAnnealing调度
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_max=20,  # 半周期长度
+            T_max=5,  # 半周期长度
             eta_min=1e-6
         )
         # 检查权重文件是否存在
@@ -131,15 +131,15 @@ class CNN():
             #         for param in child.parameters():
             #             param.requires_grad = False
             # 冻结所有层除了fc
-            # for name, param in self.model.resnet.named_parameters():
-            #     if 'fc' not in name:  # 关键修改点
-            #         param.requires_grad = False
-            #     else:
-            #         param.requires_grad = True  # 显式启用fc层
-
             for name, param in self.model.resnet.named_parameters():
-                if 'layer3' in name or 'layer4' in name:
-                    param.requires_grad = True
+                if 'fc' not in name:  # 关键修改点
+                    param.requires_grad = False
+                else:
+                    param.requires_grad = True  # 显式启用fc层
+
+            # for name, param in self.model.resnet.named_parameters():
+            #     if 'layer3' in name or 'layer4' in name:
+            #         param.requires_grad = True
         else:
             logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
 
@@ -164,9 +164,9 @@ class CNN():
             transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),  # 光照归一化
-            # transforms.RandomRotation(degrees=10),  # 限制旋转角度
-            # transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
-            # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
+            transforms.RandomRotation(degrees=10),  # 限制旋转角度
+            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
