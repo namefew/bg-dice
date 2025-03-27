@@ -272,6 +272,7 @@ class DiceVideoProcessor:
         last_frame = None
         last_i = None
         last_dot = None
+        cnt = 0
         for i in range(0, total_frames, fps * step_second):
             cap.set(cv2.CAP_PROP_POS_FRAMES, i)
             ret, frame = cap.read()
@@ -281,7 +282,14 @@ class DiceVideoProcessor:
                 x, y, w, h = roi
                 frame = frame[y:y + h, x:x + w]
             dot = self._recognize_dice_value(frame)
-            if dot == 0 or dot is None:
+            if dot is None:
+                cnt +=1
+                if cnt>=3:
+                    last_frame=None
+                continue
+            else:
+                cnt = 0
+            if dot == 0:
                 continue
             if last_dot is None:
                 last_dot = dot
