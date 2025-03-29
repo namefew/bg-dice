@@ -41,8 +41,8 @@ class DiceDataset(Dataset):
         original_idx = idx // self.num_augmentations
         img_path = os.path.join(self.root_dir, self.images[original_idx])
         image = Image.open(img_path).convert('RGB')  # 使用 PIL.Image 打开图片
-        label = int(self.images[original_idx].split('_')[0]) - 1  # 标签从0开始
-        label = 0 if label<4 else 1
+        dot = int(self.images[original_idx].split('_')[0])   # 标签从0开始
+        label = 0 if dot<4 else 1
         if self.transform:
             image = self.transform(image)
 
@@ -57,12 +57,12 @@ class DiceModel(nn.Module):
         num_ftrs = self.resnet.fc.in_features
 
         # 修改最后一层
-        # self.resnet.fc = nn.Linear(num_ftrs, num_classes)
-
+        self.resnet.fc = nn.Linear(num_ftrs, num_classes)
+        # #
         self.resnet.fc = nn.Sequential(
             nn.Linear(num_ftrs, 512),  # 添加隐藏层
             nn.ReLU(inplace=True),  # 激活函数
-            nn.Dropout(0.5),  # 添加Dropout防止过拟合
+            nn.Dropout(0.3),  # 添加Dropout防止过拟合
             nn.Linear(512, num_classes)  # 最终输出层
         )
 
@@ -80,7 +80,6 @@ class CNN():
         self.transform = transforms.Compose([
             transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
-            transforms.Lambda(self._normalize_lighting),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -95,10 +94,11 @@ class CNN():
                 fc_params.append(param)
             else:
                 resnet_params.append(param)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-5)  # 降低初始学习率
 
         self.optimizer = optim.Adam([
             {'params': [p for p in resnet_params if p.requires_grad], 'lr': 0.0001},
-            {'params': fc_params, 'lr': 0.001}
+            {'params': fc_params, 'lr': 0.0001}
         ])
         # self.optimizer = optim.AdamW(
         #     self.model.parameters(),
@@ -106,7 +106,7 @@ class CNN():
         #     weight_decay=1e-4  # 增加权重衰减
         # )
 
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
+        # self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
         # self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         #     self.optimizer,
         #     mode='max',
@@ -115,9 +115,10 @@ class CNN():
         #     verbose=True
         # )
         # 改用CosineAnnealing调度
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
-            T_max=5,  # 半周期长度
+            T_0=5,  # 5个epoch周期
+            T_mult=2,
             eta_min=1e-6
         )
         # 检查权重文件是否存在
@@ -126,16 +127,16 @@ class CNN():
             self.model.load_state_dict(torch.load(weight_path, map_location=self.device), strict=False )
             logging.info(f"Loaded model weights from {weight_path}")
             # # 冻结前 6 层  #保留 Layer3 和 Layer4 可训练
-            # for i, child in enumerate(self.model.resnet.children()):
-            #     if i < 6:
-            #         for param in child.parameters():
-            #             param.requires_grad = False
+            for i, child in enumerate(self.model.resnet.children()):
+                if i < 4:
+                    for param in child.parameters():
+                        param.requires_grad = False
             # 冻结所有层除了fc
-            for name, param in self.model.resnet.named_parameters():
-                if 'fc' not in name:  # 关键修改点
-                    param.requires_grad = False
-                else:
-                    param.requires_grad = True  # 显式启用fc层
+            # for name, param in self.model.resnet.named_parameters():
+            #     if 'fc' not in name:  # 关键修改点
+            #         param.requires_grad = False
+            #     else:
+            #         param.requires_grad = True  # 显式启用fc层
 
             # for name, param in self.model.resnet.named_parameters():
             #     if 'layer3' in name or 'layer4' in name:
@@ -150,6 +151,18 @@ class CNN():
         image_np = cv2.cvtColor(image_np, cv2.COLOR_LAB2RGB)
         return Image.fromarray(image_np)
 
+    # def _normalize_lighting(self, tensor):
+    #     # 将张量转换为numpy处理
+    #     image_np = tensor.permute(1, 2, 0).numpy() * 255
+    #     image_np = image_np.astype(np.uint8)
+    #
+    #     # 原光照归一化逻辑
+    #     image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2LAB)
+    #     image_np[:, :, 0] = cv2.equalizeHist(image_np[:, :, 0])
+    #     image_np = cv2.cvtColor(image_np, cv2.COLOR_LAB2RGB)
+    #
+    #     # 转换回张量
+    #     return transforms.ToTensor()(image_np)
     # 自定义噪声添加函数
     def _add_gaussian_noise(self, image, mean=0, std=0.1):
         np_image = np.array(image) / 255.0
@@ -170,13 +183,13 @@ class CNN():
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=1)
+        dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=4)
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
-
+        self._visualize_transformed_images(dataset,4 )
         model.train()
         # 添加最佳验证指标跟踪
         best_val_acc = 0.0
@@ -262,7 +275,7 @@ class CNN():
             probabilities = softmax(outputs).squeeze().cpu().numpy()
             predicted_class = predicted.item()
             confidence = probabilities[predicted_class]
-        return predicted_class+1, confidence
+        return predicted_class, confidence
 
     def predict_image(self, image: np.ndarray):
         """
@@ -351,9 +364,9 @@ class CNN():
         self._train_model(self.model, self.criterion, self.optimizer, self.scheduler, num_epochs=num_epochs,folder_path=folder_path)
         # 保存模型
 
-    def test(self):
+    def test(self,image_dir = 'train/new-images1'):
         # 识别 images 文件夹中 m_ 开头的图片
-        image_dir = 'train/new_val-0'
+
         total = 0
         correct = 0
         for filename in os.listdir(image_dir):
@@ -361,22 +374,17 @@ class CNN():
                 total += 1
                 image_path = os.path.join(image_dir, filename)
                 predicted_class, confidence = self.predict_image_path(image_path)
-                logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
-                # if confidence > 0.90:
-                new_filename = f'{predicted_class + 1}_{filename[2:]}'
-                if filename == new_filename:
-                    correct += 1
-                    continue
-                new_image_path = os.path.join(image_dir, new_filename)
-                # os.rename(image_path, new_image_path)
-                logging.info(f'Renamed to: {new_filename}')
+                # logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
+                dot = int(filename.split('_')[0])   # 标签从0开始
+                if dot<4 and predicted_class == 0 or dot>=4 and predicted_class == 1:
+                    correct+=1
         logging.info(f'Accuracy: {correct}/{total} = {correct / total:.4f}')
 
 
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    cnn.train(num_epochs=100,folder_path='train/new-images')  # 启用训练
-    # cnn.test()
+    # cnn.train(num_epochs=100,folder_path='train/new-images1')  # 启用训练
+    cnn.test('train/new-images1')
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

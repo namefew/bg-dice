@@ -5,7 +5,7 @@ from tkinter import ttk, filedialog
 import numpy as np
 from PIL import Image, ImageTk
 
-import bg_dice_predict_resnet18
+import bg_dice_predict_big_small
 import dice_game
 from logger import Logger
 from online_video_processor import DiceOnlineVideoProcessor
@@ -16,7 +16,7 @@ class DiceApp:
 
         self.root = root
         self.root.title("Dice Video Processor")
-        self.cnn = bg_dice_predict_resnet18.get_cnn_instance()
+        self.cnn = bg_dice_predict_big_small.get_cnn_instance()
         self.roi = [514, 134, 224, 224]
         self.save_frame_count = 0
         self.last_second = None
@@ -82,7 +82,7 @@ class DiceApp:
         self.show_image(frame)
         if changed and len(predict_next_dots) > 0:
             if self.last_second is None or second - self.last_second > 25:
-                self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences)
+                self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=0.95)
 
     def show_image(self, frame):
         # 使用 OpenCV 缩放图像到 640x640
