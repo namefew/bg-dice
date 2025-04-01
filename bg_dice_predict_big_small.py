@@ -62,7 +62,7 @@ class DiceModel(nn.Module):
         self.resnet.fc = nn.Sequential(
             nn.Linear(num_ftrs, 512),  # 添加隐藏层
             nn.ReLU(inplace=True),  # 激活函数
-            nn.Dropout(0.3),  # 添加Dropout防止过拟合
+            nn.Dropout(0.7),  # 添加Dropout防止过拟合
             nn.Linear(512, num_classes)  # 最终输出层
         )
 
@@ -128,7 +128,7 @@ class CNN():
             logging.info(f"Loaded model weights from {weight_path}")
             # # 冻结前 6 层  #保留 Layer3 和 Layer4 可训练
             for i, child in enumerate(self.model.resnet.children()):
-                if i < 4:
+                if i < 2:
                     for param in child.parameters():
                         param.requires_grad = False
             # 冻结所有层除了fc
@@ -177,19 +177,18 @@ class CNN():
             transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
             transforms.Lambda(self._normalize_lighting),  # 光照归一化
-            transforms.RandomRotation(degrees=10),  # 限制旋转角度
-            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
+            transforms.RandomRotation(degrees=5),  # 限制旋转角度
+            # transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
             transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=4)
-        train_size = int(0.8 * len(dataset))
-        val_size = len(dataset) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
-        self._visualize_transformed_images(dataset,4 )
+        train_dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=4)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+
+        val_dataset = DiceDataset(root_dir='train/new-images-new', transform=train_transform)
+        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+        self._visualize_transformed_images(train_dataset,4 )
         model.train()
         # 添加最佳验证指标跟踪
         best_val_acc = 0.0
@@ -384,7 +383,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    # cnn.train(num_epochs=100,folder_path='train/new-images1')  # 启用训练
-    cnn.test('train/new-images1')
+    # cnn.train(num_epochs=100,folder_path='train/new-images')  # 启用训练
+    cnn.test('train/new-images-new')
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

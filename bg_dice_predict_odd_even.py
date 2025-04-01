@@ -57,13 +57,12 @@ class DiceModel(nn.Module):
         num_ftrs = self.resnet.fc.in_features
 
         # 修改最后一层
-        self.resnet.fc = nn.Linear(num_ftrs, num_classes)
-        # #
+        # self.resnet.fc = nn.Linear(num_ftrs, num_classes)
         self.resnet.fc = nn.Sequential(
-            nn.Linear(num_ftrs, 512),  # 添加隐藏层
+            nn.Linear(num_ftrs, 1024),  # 添加隐藏层
             nn.ReLU(inplace=True),  # 激活函数
-            nn.Dropout(0.5),  # 添加Dropout防止过拟合
-            nn.Linear(512, num_classes)  # 最终输出层
+            nn.Dropout(0.7),  # 添加Dropout防止过拟合
+            nn.Linear(1024, num_classes)  # 最终输出层
         )
         # self.resnet.fc = nn.Sequential(
         #     nn.Dropout(0.5),
@@ -102,17 +101,18 @@ class CNN():
                 fc_params.append(param)
             else:
                 resnet_params.append(param)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-5)  # 降低初始学习率
+        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-4)  # 降低初始学习率
 
-        self.optimizer = optim.Adam([
-            {'params': [p for p in resnet_params if p.requires_grad], 'lr': 0.0005},
-            {'params': fc_params, 'lr': 0.0008}
-        ])
-        # self.optimizer = optim.AdamW(
-        #     self.model.parameters(),
-        #     lr=2e-4,  # 适当提高初始学习率
-        #     weight_decay=1e-4  # 增加权重衰减
-        # )
+        # self.optimizer = optim.Adam([
+        #     {'params': [p for p in resnet_params if p.requires_grad], 'lr': 0.0001},
+        #     {'params': fc_params, 'lr': 0.0005}
+        # ])
+
+        self.optimizer = optim.AdamW(
+            self.model.parameters(),
+            lr=2e-4,  # 适当提高初始学习率
+            weight_decay=1e-4  # 增加权重衰减
+        )
 
         # self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
         # self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -130,12 +130,12 @@ class CNN():
             eta_min=1e-6
         )
         # 学习率调度调整
-        # self.scheduler = optim.lr_scheduler.OneCycleLR(
-        #     self.optimizer,
-        #     max_lr=3e-4,
-        #     total_steps=100 * 8000,
-        #     pct_start=0.3
-        # )
+        self.scheduler = optim.lr_scheduler.OneCycleLR(
+            self.optimizer,
+            max_lr=3e-4,
+            total_steps=100 * 10000,
+            pct_start=0.3
+        )
         # 检查权重文件是否存在
         weight_path = self.weight_path = 'bg_dice_predict_odd_even.pth'
         if os.path.exists(weight_path):
@@ -143,7 +143,7 @@ class CNN():
             logging.info(f"Loaded model weights from {weight_path}")
             # # 冻结前 6 层  #保留 Layer3 和 Layer4 可训练
             for i, child in enumerate(self.model.resnet.children()):
-                if i < 4:
+                if i < 2:
                     for param in child.parameters():
                         param.requires_grad = False
             # 冻结所有层除了fc
@@ -191,21 +191,26 @@ class CNN():
         train_transform = transforms.Compose([
             transforms.Lambda(lambda img: img.crop((0, 80, img.width, img.height))),  # 新增：裁剪顶部80像素
             transforms.Resize((224, 224)),  # ResNet 需要 224x224 的输入
-            transforms.Lambda(self._normalize_lighting),  # 光照归一化
-            # transforms.RandomRotation(degrees=10),  # 限制旋转角度
-            transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # 增加光照变换
+            # transforms.Lambda(self._normalize_lighting),  # 光照归一化
+            transforms.RandomRotation(degrees=5),  # 限制旋转角度
+            transforms.RandomHorizontalFlip(p=0.2),
+            # transforms.RandomAffine(degrees=(-10, 10), translate=(0, 0.2), scale=(0.8, 1.1)),  # 只允许向下平移
+            transforms.RandomApply([transforms.ColorJitter(0.1, 0.1, 0.1)], p=0.5),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        train_dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=1)
-        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+        train_dataset = DiceDataset(root_dir=folder_path, transform=train_transform, num_augmentations=4)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 
-        val_dataset = DiceDataset(root_dir=val_folder, transform=self.transform)
-        val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
+        val_dataset = DiceDataset(root_dir=val_folder, transform=train_transform)
+        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
         self._visualize_transformed_images(train_dataset,4 )
         model.train()
         # 添加最佳验证指标跟踪
+        # 在_train_model中添加
+        patience = 5
+        no_improve = 0
+        best_val_acc = 0
         best_val_acc = 0.0
         scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
 
@@ -264,9 +269,14 @@ class CNN():
             # 根据验证指标保存最佳模型
             if val_epoch_acc > best_val_acc:
                 best_val_acc = val_epoch_acc
+                no_improve = 0
                 torch.save(model.state_dict(), self.weight_path)
                 logging.info(f'New best model saved with val acc: {best_val_acc:.4f}')
-
+            else:
+                no_improve += 1
+                if no_improve == patience:
+                    logging.info(f'Early stopping at epoch {epoch}')
+                    break
             scheduler.step(val_epoch_acc)  # 更新学习率
         torch.save(model.state_dict(), self.weight_path.replace('.pth','_last.pth'))
 
@@ -390,7 +400,7 @@ class CNN():
                 predicted_class, confidence = self.predict_image_path(image_path)
                 # logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
                 dot = int(filename.split('_')[0])   # 标签从0开始
-                if dot<4 and predicted_class == 0 or dot>=4 and predicted_class == 1:
+                if dot in [1,3,5] and predicted_class == 0 or dot in [2,4,6] and predicted_class == 1:
                     correct+=1
         logging.info(f'Accuracy: {correct}/{total} = {correct / total:.4f}')
 
@@ -398,7 +408,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    cnn.train(num_epochs=100,folder_path='train/new-images1')  # 启用训练
-    # cnn.test('train/new-images-new')
+    # cnn.train(num_epochs=100,folder_path='train/new-images')  # 启用训练
+    cnn.test('train/new-images-new')
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

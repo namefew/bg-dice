@@ -123,17 +123,18 @@ class DiceVideoProcessor:
             w = frame.shape[1]
             h = frame.shape[0]
             # # 提取特征（位置、大小、角度等）
-            features0 = self.cnn.extract_features_from_image(frame)
+            # features0 = self.cnn.extract_features_from_image(frame)
             features = self._extract_features(dice_roi, x1 / w, y1 / h, w1 / w, h1 / h, dot)
-            features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
+            # features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
             features = features.numpy() if isinstance(features, torch.Tensor) else features
             # 合并特征数组
-            combined_features = np.concatenate((features0.flatten(), features))
-
-            return combined_features
+            # combined_features = np.concatenate((features0.flatten(), features))
+            #
+            # return combined_features
+            return features
         return None
 
-    def _extract_features(self, dice_roi, x, y, w, h, predicted_class):
+    def _extract_features(self, dice_roi, x, y, w, h, dot):
         """从骰子区域提取特征"""
         # 转为灰度图
         gray = cv2.cvtColor(dice_roi, cv2.COLOR_BGR2GRAY)
@@ -153,7 +154,7 @@ class DiceVideoProcessor:
             center_x, center_y = w / 2, h / 2
 
         # 提取纹理特征 (LBP)
-        lbp_hist = self._extract_texture(dice_roi)
+        # lbp_hist = self._extract_texture(dice_roi)
 
         # 提取形状特征 (Hu矩)
         hu_moments = self._extract_shape_features(dice_roi)
@@ -162,24 +163,29 @@ class DiceVideoProcessor:
         edges = cv2.Canny(gray, 50, 150)
         edge_hist = cv2.calcHist([edges], [0], None, [256], [0, 256]).flatten()
 
+        # 计算角度矢量
+        mu = hu_moments.tolist()
+        if np.sum(mu) > 1e-5:  # 防止除零错误
+            theta = 0.5 * np.arctan2(2 * mu[1], mu[0] - mu[2])
+            angle_vector = [np.cos(theta), np.sin(theta)]
+        else:
+            angle_vector = [0.0, 0.0]
+
         # 返回特征向量
         features = {
             "position": (x, y),
             "size": (w, h),
             "center": (center_x, center_y),
-            "dots_count": predicted_class + 1,
-            "mean_color": np.mean(dice_roi, axis=(0, 1)).tolist(),
-            "std_color": np.std(dice_roi, axis=(0, 1)).tolist(),
-            "lbp_hist": lbp_hist.tolist(),
+            "dot": dot,
             "hu_moments": hu_moments.tolist(),
-            "edge_hist": edge_hist.tolist()
+            "edge_hist": edge_hist.tolist(),
+            "angle_vector": angle_vector
         }
-        # 展平特征向量
-
         flat_features = [
-            x, y, w, h, center_x, center_y, predicted_class + 1,
-            *features["mean_color"], *features["std_color"],
-            *features["lbp_hist"], *features["hu_moments"], *features["edge_hist"]
+            x, y, w, h, center_x, center_y, dot,
+            *features["hu_moments"],
+            *features["edge_hist"],
+            *features["angle_vector"]
         ]
 
         return np.array(flat_features, dtype=np.float32)
@@ -329,6 +335,7 @@ class DiceVideoProcessor:
         cap = cv2.VideoCapture(video_path)
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame0 = None
         last_frame = None
         last_i = None
         last_dot = None
@@ -349,20 +356,22 @@ class DiceVideoProcessor:
                 continue
             if dot != last_dot:
                 if last_i is None or i - last_i > 20:
-                    dice_frame,poi = self.__extract_dice(frame)
+                    dice_frame,poi = self.__extract_dice(last_frame)
                     if dice_frame is not None:
                         x1,y1,w1,h1=poi
                         if 60 >= w1 >= 30 and 60 >= h1 >= 30:
-                            # cv2.imwrite(f'{output_folder}/{dot}_{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', frame)
-                            features0 = self.cnn.extract_features_from_image(frame)
-                            features = self._extract_features(dice_frame, x1 / w, y1 / h, w1 / w, h1 / h, dot)
-                            features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
+                            cv2.imwrite(f'{output_folder}/../images0/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', dice_frame)
+                            cv2.imwrite(f'{output_folder}/../images/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',last_frame)
+
+                            # features0 = self.cnn.extract_features_from_image(last_frame)
+                            features = self._extract_features(dice_frame, x1, y1 , w1 , h1, dot)
+                            # features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
                             features = features.numpy() if isinstance(features, torch.Tensor) else features
-                            classify = last_dot * dot - 1
+                            classify = dot-1
                             # 合并特征数组
-                            combined_features = np.concatenate((features0.flatten(), features, [classify]))
+                            combined_features = np.concatenate(( features, [classify]))
                             # 保存合并后的特征向量
-                            feature_file_path = f'{output_folder}/{dot}_{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.npy'
+                            feature_file_path = f'{output_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.npy'
                             np.save(feature_file_path, combined_features)
                     last_i = i
             elif dot == last_dot:
@@ -373,22 +382,33 @@ class DiceVideoProcessor:
                 non_zero_pixels = cv2.countNonZero(thresh)
                 if non_zero_pixels > 300:  # 假设100个像素的变化可以忽略
                     if last_i is None or i - last_i > 10:
-                        dice_frame, poi = self.__extract_dice(frame)
-                        if dice_frame is not None:
-                            x1, y1, w1, h1 = poi
-                            if 60 >= w1 >= 30 and 60 >= h1 >= 30:
-                                # cv2.imwrite(f'{output_folder}/{dot}_{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', frame)
-                                features0 = self.cnn.extract_features_from_image(frame)
-                                features = self._extract_features(dice_frame, x1 / w, y1 / h, w1 / w, h1 / h, dot)
-                                features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
-                                features = features.numpy() if isinstance(features, torch.Tensor) else features
-                                classify = last_dot*dot-1
-                                # 合并特征数组
-                                combined_features = np.concatenate((features0.flatten(), features,[classify]))
-                                # 保存合并后的特征向量
-                                feature_file_path = f'{output_folder}/{dot}_{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.npy'
-                                np.save(feature_file_path, combined_features)
+                        dice_frame0, poi0 = self.__extract_dice(frame)
+                        if poi0 is not None:
+                            x0, y0, w0, h0 = poi0
+                            if 60 >= w0 >= 30 and 60 >= h0 >= 30:
+                                dice_frame, poi = self.__extract_dice(last_frame)
+                                if dice_frame is not None:
+                                    x1, y1, w1, h1 = poi
+                                    if 60 >= w1 >= 30 and 60 >= h1 >= 30:
+                                        # cv2.imwrite(f'{output_folder}/{dot}_{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', frame)
+                                        cv2.imwrite(
+                                            f'{output_folder}/../images0/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
+                                            dice_frame)
+                                        cv2.imwrite(
+                                            f'{output_folder}/../images/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
+                                            last_frame)
 
+                                        # features0 = self.cnn.extract_features_from_image(last_frame)
+                                        features = self._extract_features(dice_frame, x1, y1, w1 , h1,
+                                                                          last_dot)
+                                        # features0 = features0.numpy() if isinstance(features0,torch.Tensor) else features0
+                                        features = features.numpy() if isinstance(features, torch.Tensor) else features
+                                        classify = dot - 1
+                                        # 合并特征数组
+                                        combined_features = np.concatenate(( features, [classify]))
+                                        # 保存合并后的特征向量
+                                        feature_file_path = f'{output_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.npy'
+                                        np.save(feature_file_path, combined_features)
                 last_i = i
             last_frame = frame
             last_dot = dot
@@ -421,6 +441,7 @@ class DiceVideoProcessor:
             raise ValueError("请先提取背景")
         # 计算当前帧与背景的差异
         diff = cv2.absdiff(frame, self.background)
+        diff[0:80, :]=0
         gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
 
         # 自适应直方图均衡化（CLAHE）

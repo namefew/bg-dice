@@ -72,18 +72,19 @@ class DiceGame:
             for c in range(0, min(cnt, len(predict_next_dots))):
                 dot = predict_next_dots[c]
                 for member in list(BetType):
-
                     if dot in member.wind_dots and len(member.wind_dots) == 1 :
                         exp = member.expectation(prediction_dict)
+                        self.logger.info(f'{member.display_name} 期望：{exp}')
                         if exp >= min_exp:
-                            self.logger.info(f'{member} 期望：{exp}')
                             bets.append(DiceBet(member))
         else:
             for member in list(BetType):
                 if member.display_name in type:
                     exp = member.expectation(prediction_dict)
-                    the_odds = exp/(member.odds+1)
-                    if the_odds >= 0.5:
+                    self.logger.info(f'{member.display_name} 期望：{exp}')
+                    if exp >= min_exp:
+                    # the_odds = exp/(member.odds+1)
+                    # if the_odds >= 0.5:
                         self.logger.info(f'{member.display_name} 期望：{exp}')
                         bets.append(DiceBet(member))
 
@@ -100,7 +101,8 @@ class DiceGame:
                     self.max_win = self.total_win
                 if self.min_win>self.total_win:
                     self.min_win = self.total_win
-                self.logger.info(f"{second}秒 结果:{current_dot}点 下注:{[str(bet) for bet in self.current_bets]} 盈利:{result:.2f} 下注量:{self.total_bets} 总盈利:{self.total_win:.2f}  最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f}")
+                self.logger.info(f"{second}秒 结果:{current_dot}点 下注:{[str(bet) for bet in self.current_bets]} 盈利:{result:.2f} ")
+                self.logger.info(f"当前盈利: {self.total_win:.2f}/{self.total_bets}  {self.total_win/self.total_bets} 最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f}")
             confidence_str = np.array2string(predict_confidences, separator=', ',
                                              formatter={'float_kind': lambda x: f"{x:.4f}"})
 

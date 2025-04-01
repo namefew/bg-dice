@@ -71,7 +71,7 @@ class DiceModel(nn.Module):
             nn.Linear(num_ftrs, 512),
             nn.BatchNorm1d(512),  # 添加批归一化
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
             nn.Linear(512, 256),
             nn.LayerNorm(256),  # 层归一化
             nn.GELU(),  # 改用GELU激活
@@ -408,7 +408,7 @@ class CNN():
 # 程序入口
 if __name__ == "__main__":
     cnn = get_cnn_instance()
-    cnn.train(num_epochs=50,folder_path='train/new-images1')  # 启用训练
+    cnn.train(num_epochs=20,folder_path='train/new-images1')  # 启用训练
     # cnn.test(image_dir='train/new-images1')
     # predicted_class, confidence = cnn.predict_image_path('output/dice_roi1742046702.3200257.jpg')
     # print(f'Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')

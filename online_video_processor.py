@@ -129,7 +129,7 @@ class DiceOnlineVideoProcessor:
         n = 15 if self.is_seekable else 7
         try:
             while self.running:
-                start = time.time()
+                # start = time.time()
                 second += n
                 if self.is_seekable:  # 本地文件模式
                     if second * self.fps > self.total_frames:
@@ -141,27 +141,33 @@ class DiceOnlineVideoProcessor:
                     for _ in range(int(self.fps * n)):
                         ret, frame = self.cap.read()
                         if not ret:
-                            print("Failed to read frame")
-                            self.stop_process()
-                            return
+                            if self.is_seekable:
+                                self.logger.info("Failed to read frame")
+                                self.stop_process()
+                                return
+                            else:
+                                self.logger.info("视频流已结束，尝试重新连接...")
+                                self.start_process(self.url)
+                                return
 
                 ret, frame = self.cap.retrieve()
                 if not ret:
-                    print("Failed to read frame")
+                    self.logger.info("Failed to read frame")
                     if self.is_seekable:
+                        self.logger.info("视频流已结束!")
                         self.stop_process()
                         return
                     else:
                         self.logger.info("视频流已结束，尝试重新连接...")
                         self.start_process(self.url)
                         return
-                end = time.time()
-                self.logger.info(f"{second}解码耗时：{(end-start)*100:.4f}ms")
+                # end = time.time()
+                #self.logger.info(f"{second}解码耗时：{(end-start)*100:.4f}ms")
                 if self.roi is not None:
                     x, y, w, h = self.roi
                     frame = frame[y:y + h, x:x + w]
                 second = self.next_frame(frame, second)
-                self.logger.info(f"{second}处理耗时：{(time.time() - end) * 100:.4f}ms")
+                #self.logger.info(f"{second}处理耗时：{(time.time() - end) * 100:.4f}ms")
         except Exception as e:
             self.logger.error(f"处理视频时发生异常: {str(e)}")
             traceback.print_exc()
@@ -172,15 +178,15 @@ class DiceOnlineVideoProcessor:
         """处理每一秒采样的帧图像"""
         dot, cf = self.dot_cnn.predict_image(frame)
         if dot == 0:
-            self.logger.info(f"Detected dot moving: {dot}")
+            self.logger.info(f"{second} 检测骰子在动: {dot}")
             if self.is_seekable:
                 return second + random.randint(2,4)
             return second
         if cf<0.97:
-            self.logger.info(f"Detected dot:{dot} confidence {cf:.4f} too low ")
+            self.logger.info(f"{second}检测骰子点数:{dot} 置信度 {cf:.4f} 太小 ")
             cv2.imwrite(f"{self.image_dir}/{dot}_{second}_{cf:.4f}.jpg", frame)
             return second
-        self.logger.info(f"Detected dot {dot} confidence {cf:.4f}")
+        self.logger.info(f"{second}检测骰子点数:{dot} 置信度 {cf:.4f}")
         if self.last_dot is None:
             self.last_dot = dot
             self.last_frame = frame
@@ -188,7 +194,7 @@ class DiceOnlineVideoProcessor:
         changed = False
         if dot != self.last_dot:
             changed = True
-            self.logger.info(f"Detected dice value changed: last_dot={self.last_dot}, current_dot= {dot}")
+            self.logger.info(f"{second}检测骰子点数变动: {self.last_dot} ==> {dot}")
         if not changed and self.last_frame is not None:
             diff = cv2.absdiff(frame, self.last_frame)
             gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
@@ -197,9 +203,9 @@ class DiceOnlineVideoProcessor:
             non_zero_pixels = cv2.countNonZero(thresh)
             if non_zero_pixels > 100:
                 changed = True
-                self.logger.info(f"Dice movement detected: last_dot={self.last_dot}, current_dot={dot}")
+                self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
         for callback in self.next_frame_callbacks:
-            callback(frame, second, dot, changed)
+            callback(frame, second, dot, changed,self.last_frame)
         self.last_frame = frame
         self.last_dot = dot
         return second
@@ -211,9 +217,13 @@ class DiceOnlineVideoProcessor:
             return None
         return dot
 
-    def calculate_background(self, frame, second, dot, changed):
+    def calculate_background(self, frame, second, dot, changed,last_frame):
         if self.background is not None:
-            return
+            if self.is_seekable:
+                return
+            if changed and len(self.background_frames)<30:
+                self.background_frames.append(frame)
+                return
         if self.is_seekable:
             total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
             num_frames = min(200, total_frames)
