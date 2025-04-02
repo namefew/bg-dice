@@ -83,9 +83,8 @@ class DiceApp:
             confidence_str = confidence_str.strip('[]')
             self.dot_label.config(text=f"{second}当前：{current_dot}预测: {predict_next_dots}预测置信度: {confidence_str}")
             self.show_image(frame)
-            if len(predict_next_dots) > 0:
-                if self.last_second is None or second - self.last_second > 25:
-                    self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
+            if self.last_second is None or second - self.last_second > 25:
+                self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
 
     def show_image(self, frame):
         # 使用 OpenCV 缩放图像到 640x640
