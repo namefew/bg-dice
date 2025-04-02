@@ -7,12 +7,12 @@ from PIL import Image, ImageTk
 
 import feature_analyzer
 import dice_game
-from logger import Logger
+from logger import LogManager
 from online_video_processor import DiceOnlineVideoProcessor
 
 class DiceApp:
     def __init__(self, root):
-        self.logger = Logger(log_file="app.log")
+        self.logger = LogManager.setup()
 
         self.root = root
         self.root.title("Dice Video Processor")
@@ -72,19 +72,20 @@ class DiceApp:
     def process_frame(self, frame, second, current_dot, changed,last_frame):
         if last_frame is not None and not self.processor.is_seekable:
             self.cnn.add_sample(current_dot=current_dot,last_frame=last_frame ,background=self.processor.background)
-        predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background)
-        predict_next_dots = [int(pd) for pd in predict_dots]
-        predict_confidences = np.around(confidences, decimals=4)
-        # 将数组转换为字符串
-        confidence_str = np.array2string(predict_confidences, separator=', ',
-                                         formatter={'float_kind': lambda x: f"{x:.4f}"})
-        # 去掉数组的方括号
-        confidence_str = confidence_str.strip('[]')
-        self.dot_label.config(text=f"{second}当前：{current_dot}预测: {predict_next_dots}预测置信度: {confidence_str}")
-        self.show_image(frame)
-        if changed and len(predict_next_dots) > 0:
-            if self.last_second is None or second - self.last_second > 25:
-                self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
+        if changed:
+            predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background)
+            predict_next_dots = [int(pd) for pd in predict_dots]
+            predict_confidences = np.around(confidences, decimals=4)
+            # 将数组转换为字符串
+            confidence_str = np.array2string(predict_confidences, separator=', ',
+                                             formatter={'float_kind': lambda x: f"{x:.4f}"})
+            # 去掉数组的方括号
+            confidence_str = confidence_str.strip('[]')
+            self.dot_label.config(text=f"{second}当前：{current_dot}预测: {predict_next_dots}预测置信度: {confidence_str}")
+            self.show_image(frame)
+            if len(predict_next_dots) > 0:
+                if self.last_second is None or second - self.last_second > 25:
+                    self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
 
     def show_image(self, frame):
         # 使用 OpenCV 缩放图像到 640x640

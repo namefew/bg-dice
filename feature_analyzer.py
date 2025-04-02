@@ -2,7 +2,7 @@ import numpy as np
 import os
 import pickle
 from collections import defaultdict
-from scipy.spatial.distance import cdist
+from scipy.spatial import KDTree
 
 from video_processor import DiceVideoProcessor
 
@@ -63,20 +63,27 @@ class FeatureAnalyzer:
 
     def find_nearby_samples(self, target_x, target_y, radius=5):
         """查找指定坐标半径范围内的样本"""
-        target_point = np.array([[target_x, target_y]])
-        all_points = np.array([[s['coordinates'][0], s['coordinates'][1]] for s in self.samples])
-        
-        # 使用cdist高效计算距离
-        distances = cdist(target_point, all_points)[0]
-        
-        return [self.samples[i] for i in np.where(distances <= radius)[0]]
-    
+        if not self.samples:
+            return []
+
+        # 构造 KDTree
+        all_points = np.array([
+            [s['coordinates'][0], s['coordinates'][1]]
+            for s in self.samples
+            if 'coordinates' in s and len(s['coordinates']) == 2
+        ])
+        if all_points.size == 0:
+            return []
+
+        tree = KDTree(all_points)
+        indices = tree.query_ball_point([target_x, target_y], radius)
+        return [self.samples[i] for i in indices]
     def _predict(self, target_x, target_y, current_dot, min_rate = 0.2):
         """多半径概率分析"""
         state = {}
         rule_counts = defaultdict(int)  # 统计各规则触发次数
         results = {}
-        for r in [1,2,3,4,5]:
+        for r in [3,4,5]:
             nearby = self.find_nearby_samples(target_x, target_y, r)
             if not nearby:
                 continue
@@ -98,7 +105,7 @@ class FeatureAnalyzer:
                     dot_counts[sample['next_dot']] += 1
             # 计算概率
             total = len(nearby)
-            if total:
+            if total>5:
 
                 next_probs = {k: v / total for k, v in dot_nexts.items()}
                 most_dot = max(next_probs, key=next_probs.get)
@@ -121,27 +128,28 @@ class FeatureAnalyzer:
                     'next_most_prob':next_probs.get(most_dot), # 下次出现次数最多的点数的概率
                 }
                 final_rule = None
-                if state[r]['same_prob'] > min_rate:
+                if state[r]['same_prob'] > min_rate and state[r]['same_prob'] >= state[r]['seven_prob']:
                     final_rule = {'next': current_dot, 'prob': state[r]['same_prob'],
                                   'sample': state[r]['total'], 'rule': 1,'radius':r}
-                elif state[r]['seven_prob'] > min_rate:
+                elif state[r]['seven_prob'] > min_rate and state[r]['seven_prob'] >= state[r]['same_prob']:
                     final_rule = {'next': 7 - current_dot, 'prob': state[r]['seven_prob'],
                                   'sample': state[r]['total'], 'rule': 2,'radius':r}
-                elif state[r]['current_most_prob'] > min_rate:
-                    final_rule = {'next': state[r]['current_most_dot'],
-                                  'prob': state[r]['current_most_prob'] / state[r]['current_total'],
-                                  'sample': state[r]['current_total'], 'rule': 3,'radius':r}
-                elif state[r]['next_most_prob'] > min_rate:
-                    final_rule = {'next': state[r]['next_most_dot'],
-                                  'prob': state[r]['next_most_prob'],
-                                  'sample': state[r]['total'], 'rule': 4,'radius':r}
+                # elif state[r]['current_most_prob'] > min_rate and state[r]['current_most_prob']>=state[r]['next_most_prob']:
+                #     final_rule = {'next': state[r]['current_most_dot'],
+                #                   'prob': state[r]['current_most_prob'] / state[r]['current_total'],
+                #                   'sample': state[r]['current_total'], 'rule': 3,'radius':r}
+                # elif state[r]['next_most_prob'] > min_rate and state[r]['next_most_prob'] >= state[r]['current_most_prob']:
+                #     final_rule = {'next': state[r]['next_most_dot'],
+                #                   'prob': state[r]['next_most_prob'],
+                #                   'sample': state[r]['total'], 'rule': 4,'radius':r}
 
                 if final_rule:
-                    print(f"半径{r}：样本数:{total} 结果：{final_rule}")
+                    print(final_rule)
                     results[r] = final_rule
                     rule_counts[final_rule['next']] += 1
 
         # 选择出现次数最多的预测结果
+
         if rule_counts:
             max_count = max(rule_counts.values())
             if max_count == 1:
@@ -169,7 +177,7 @@ class FeatureAnalyzer:
             return None, None
         x = features[4] + features[0]  # 根据实际特征位置调整索引
         y = features[5] + features[1]
-        result = self._predict(x,y,features[6])
+        result = self._predict(x,y,int(features[6]))
         if result:
             return result['next'], result['prob']
         else:
@@ -216,10 +224,17 @@ if __name__ == "__main__":
     # 后续使用可以直接加载
     analyzer.load_samples()  # 从保存文件快速加载
     # 示例坐标（替换为实际需要分析的坐标）
-    target_x, target_y = 112, 112  # 图像中心位置
-    #
-    result = analyzer.predict(target_x, target_y,6)
-    if result:
-        print(f"预测点数: {result['next']} (置信度: {result['prob']:.2%}, 样本数: {result['sample']}, 规则: {result['rule']})")
-    else:
-        print("该区域未找到历史数据")
+    for x in range(20, 220, 4):
+        for y in range(20, 220, 4):
+            result = analyzer._predict(x, y,1)
+            if result:
+                print(f"预测点数: {result['next']} (置信度: {result['prob']:.2%}, 样本数: {result['sample']}, 规则: {result['rule']})")
+            else:
+                print("该区域未找到历史数据")
+    # target_x, target_y = 112, 112  # 图像中心位置
+    # #
+    # result = analyzer.predict(target_x, target_y,6)
+    # if result:
+    #     print(f"预测点数: {result['next']} (置信度: {result['prob']:.2%}, 样本数: {result['sample']}, 规则: {result['rule']})")
+    # else:
+    #     print("该区域未找到历史数据")

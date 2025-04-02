@@ -124,7 +124,7 @@ class DiceVideoProcessor:
             h = frame.shape[0]
             # # 提取特征（位置、大小、角度等）
             # features0 = self.cnn.extract_features_from_image(frame)
-            features = self._extract_features(dice_roi, x1 / w, y1 / h, w1 / w, h1 / h, dot)
+            features = self._extract_features(dice_roi, x1 , y1 , w1 , h1 , dot)
             # features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
             features = features.numpy() if isinstance(features, torch.Tensor) else features
             # 合并特征数组
@@ -364,7 +364,7 @@ class DiceVideoProcessor:
                             cv2.imwrite(f'{output_folder}/../images/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',last_frame)
 
                             # features0 = self.cnn.extract_features_from_image(last_frame)
-                            features = self._extract_features(dice_frame, x1, y1 , w1 , h1, dot)
+                            features = self._extract_features(dice_frame, x1, y1 , w1 , h1, last_dot)
                             # features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
                             features = features.numpy() if isinstance(features, torch.Tensor) else features
                             classify = dot-1
