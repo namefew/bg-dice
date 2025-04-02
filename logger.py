@@ -1,54 +1,57 @@
 import logging
-import sys
-from datetime import datetime
+from colorama import Fore, Style, init
 
-class Logger:
-    def __init__(self, log_file=None, level=logging.INFO):
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(level)
+# 初始化 colorama
+init(autoreset=True)
 
-        # 禁用默认的根日志处理器
-        if not self.logger.handlers:
-            self.logger.propagate = False
+class ColoredFormatter(logging.Formatter):
+    COLORS = {
+        'DEBUG': Fore.LIGHTBLACK_EX,
+        'INFO': Fore.GREEN,
+        'WARNING': Fore.YELLOW,
+        'ERROR': Fore.RED,
+        'CRITICAL': Fore.RED + Style.BRIGHT
+    }
 
-        # 创建一个格式化器
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    def format(self, record):
+        log_color = self.COLORS.get(record.levelname, Fore.RESET)
+        original_msg = record.msg
+        record.msg = f"{log_color}{original_msg}{Style.RESET_ALL}"
+        formatted_msg = super().format(record)
+        record.msg = original_msg  # 恢复原始消息，避免重复着色
+        return formatted_msg
 
-        # 创建一个流处理器，用于输出到控制台
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setLevel(level)
-        stream_handler.setFormatter(formatter)
-        self.logger.addHandler(stream_handler)
+class LogManager:
+    _logger = None
 
-        # 如果提供了日志文件路径，则创建一个文件处理器，用于输出到文件
-        if log_file:
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setLevel(level)
-            file_handler.setFormatter(formatter)
-            self.logger.addHandler(file_handler)
+    @staticmethod
+    def setup():
+        if LogManager._logger is None:
+            # 创建一个日志记录器
+            logger = logging.getLogger('MAIN')
+            logger.setLevel(logging.INFO)
 
-    def debug(self, message):
-        self.logger.debug(message)
+            # 避免重复添加处理器
+            if not logger.hasHandlers():
+                # 创建一个控制台处理器
+                ch = logging.StreamHandler()
+                ch.setLevel(logging.INFO)
 
-    def info(self, message):
-        self.logger.info(message)
+                # 创建一个自定义格式化器
+                formatter = ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    def warning(self, message):
-        self.logger.warning(message)
+                # 将格式化器添加到处理器
+                ch.setFormatter(formatter)
 
-    def error(self, message):
-        self.logger.error(message)
+                # 将处理器添加到日志记录器
+                logger.addHandler(ch)
 
-    def critical(self, message):
-        self.logger.critical(message)
+                # 创建一个文件处理器
+                fh = logging.FileHandler('app.log')
+                fh.setLevel(logging.DEBUG)
+                fh_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                fh.setFormatter(fh_formatter)
+                logger.addHandler(fh)
 
-
-# 示例用法
-if __name__ == "__main__":
-    logger = Logger(log_file="app.log", level=logging.DEBUG)
-
-    logger.debug("This is a debug message")
-    logger.info("This is an info message")
-    logger.warning("This is a warning message")
-    logger.error("This is an error message")
-    logger.critical("This is a critical message")
+            LogManager._logger = logger
+        return LogManager._logger
