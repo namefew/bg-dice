@@ -70,7 +70,7 @@ class DiceApp:
             self.processor.stop_process()
 
     def process_frame(self, frame, second, current_dot, changed,last_frame):
-        if last_frame is not None and not self.processor.is_seekable:
+        if changed and last_frame is not None and not self.processor.is_seekable:
             self.cnn.add_sample(current_dot=current_dot,last_frame=last_frame ,background=self.processor.background)
         if changed:
             predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background)

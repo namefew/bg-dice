@@ -80,7 +80,7 @@ class DiceDataset(Dataset):
 
             # 绘制热力图
             hb = axs[i].hexbin(x_coords, y_coords,
-                               gridsize=int(224/6),
+                               gridsize=int(112),
                                cmap='Oranges',  # 更改为Blues颜色映射
                                mincnt=1,
                                extent=[0, 224, 0, 224])  # 设置x和y的范围
@@ -146,7 +146,7 @@ class DiceDataset(Dataset):
             df.to_csv(f'label_{label}_heatmap_data.csv', index=False)
 
 
-    def __getitem__(self, idx):
+    def __getitem__0(self, idx):
         array = self.data_arrays[idx]
         # 假设特征向量结构为：[x, y, 其他特征..., 当前点数]
         x = array[4]+array[0]  # 根据实际特征位置调整索引
@@ -212,7 +212,7 @@ class DiceClassifier:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = TransitionModel().to(self.device)  # 修改模型输入维度
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=1e-5)  # 添加L2正则化
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=1e-3)  # 添加L2正则化
         self.scheduler = StepLR(self.optimizer, step_size=10, gamma=0.1)  # 学习率调度器
         weight_path = self.weight_path = 'dice_transition_model.pth'
         if os.path.exists(weight_path):
@@ -402,11 +402,11 @@ class DiceClassifier:
 
 
 if __name__ == "__main__":
-    dataset = DiceDataset(folder_path='train/features')
-    dataset.plot_all_label_heatmaps()
-    dataset.plot_all_label_heatmaps_to_table()
+    # dataset = DiceDataset(folder_path='train/features')
+    # dataset.plot_all_label_heatmaps()
+    # dataset.plot_all_label_heatmaps_to_table()
 
     # dataset.plot_dot_distribution()
-    # classifier = DiceClassifier()
-    # classifier.train(folder_path='train/features')
+    classifier = DiceClassifier()
+    classifier.train(folder_path='train/features')
 
