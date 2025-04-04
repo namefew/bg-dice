@@ -56,7 +56,7 @@ class DiceVideoProcessor:
         return median
 
 
-    def _extract_background(self, video_path, output_folder='images', num_frames=20, roi=None):
+    def _extract_background(self, video_path, output_folder='images', num_frames=50, roi=None):
         self._save_first_frame(video_path, output_folder)
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -331,7 +331,11 @@ class DiceVideoProcessor:
         video_filename = os.path.basename(video_path)
         base, _ = os.path.splitext(video_filename)
         # output_folder = os.path.join(output_folder, video_filename.split('.')[0])
+        img0_folder=f'{output_folder}/../images0'
+        img_folder=f'{output_folder}/../images'
         os.makedirs(output_folder, exist_ok=True)
+        os.makedirs(img0_folder, exist_ok=True)
+        os.makedirs(img_folder, exist_ok=True)
         cap = cv2.VideoCapture(video_path)
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -360,9 +364,8 @@ class DiceVideoProcessor:
                     if dice_frame is not None:
                         x1,y1,w1,h1=poi
                         if 60 >= w1 >= 30 and 60 >= h1 >= 30:
-                            cv2.imwrite(f'{output_folder}/../images0/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', dice_frame)
-                            cv2.imwrite(f'{output_folder}/../images/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',last_frame)
-
+                            cv2.imwrite(f'{img0_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', dice_frame)
+                            cv2.imwrite(f'{img_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',last_frame)
                             # features0 = self.cnn.extract_features_from_image(last_frame)
                             features = self._extract_features(dice_frame, x1, y1 , w1 , h1, last_dot)
                             # features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
@@ -392,10 +395,10 @@ class DiceVideoProcessor:
                                     if 60 >= w1 >= 30 and 60 >= h1 >= 30:
                                         # cv2.imwrite(f'{output_folder}/{dot}_{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', frame)
                                         cv2.imwrite(
-                                            f'{output_folder}/../images0/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
+                                            f'{img0_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
                                             dice_frame)
                                         cv2.imwrite(
-                                            f'{output_folder}/../images/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
+                                            f'{img_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
                                             last_frame)
 
                                         # features0 = self.cnn.extract_features_from_image(last_frame)

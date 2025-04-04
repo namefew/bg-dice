@@ -59,8 +59,8 @@ class DiceDataset(Dataset):
         label = int(self.files[idx].split('_')[0])-1  # 标签从0开始
         # return torch.tensor(feature_vector, dtype=torch.float32), torch.tensor(label, dtype=torch.long)
 
-        x = array[4] + array[0]  # 根据实际特征位置调整索引
-        y = array[5] + array[1]
+        x = array[2]/2 + array[0]  # 根据实际特征位置调整索引
+        y = array[3]/2 + array[1]
         return torch.tensor([x, y,array[2],array[3]], dtype=torch.float32), torch.tensor(label, dtype=torch.long)
 
     def plot_all_label_heatmaps(self):
@@ -146,11 +146,11 @@ class DiceDataset(Dataset):
             df.to_csv(f'label_{label}_heatmap_data.csv', index=False)
 
 
-    def __getitem__0(self, idx):
+    def __getitem__(self, idx):
         array = self.data_arrays[idx]
         # 假设特征向量结构为：[x, y, 其他特征..., 当前点数]
-        x = array[4]+array[0]  # 根据实际特征位置调整索引
-        y = array[5]+array[1]
+        x = array[2]/2+array[0]  # 根据实际特征位置调整索引
+        y = array[3]/2+array[1]
         current_dot = int(self.files[idx].split('_')[1][0])  # 倒数第二个位置是当前点数
         next_dot = int(self.files[idx].split('_')[0])  # 文件名中的目标点数
         label = 0
@@ -402,11 +402,11 @@ class DiceClassifier:
 
 
 if __name__ == "__main__":
-    # dataset = DiceDataset(folder_path='train/features')
-    # dataset.plot_all_label_heatmaps()
+    dataset = DiceDataset(folder_path='train/features')
+    dataset.plot_all_label_heatmaps()
     # dataset.plot_all_label_heatmaps_to_table()
 
     # dataset.plot_dot_distribution()
-    classifier = DiceClassifier()
-    classifier.train(folder_path='train/features')
+    # classifier = DiceClassifier()
+    # classifier.train(folder_path='train/features')
 

@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 
 import feature_analyzer
 import dice_game
+from config_file_watcher import start_file_watcher
 from logger import LogManager
 from online_video_processor import DiceOnlineVideoProcessor
 
@@ -17,6 +18,8 @@ class DiceApp:
         self.root = root
         self.root.title("Dice Video Processor")
         self.cnn = feature_analyzer.get_cnn_instance()
+        observer = start_file_watcher(self.cnn)
+
         self.roi = [514, 134, 224, 224]
         self.save_frame_count = 0
         self.last_second = None
@@ -49,9 +52,13 @@ class DiceApp:
         self.image_label = ttk.Label(self.root)
         self.image_label.grid(row=2, column=0, columnspan=6, padx=10, pady=10)
 
+        # 新增：统计下注结果标签
+        self.bet_result_label = ttk.Label(self.root, text="统计下注结果: ")
+        self.bet_result_label.grid(row=3, column=0, columnspan=6, padx=10, pady=10)
+
         # 预测点数标签
         self.dot_label = ttk.Label(self.root, text="预测: ")
-        self.dot_label.grid(row=3, column=0, columnspan=6, padx=10, pady=10)
+        self.dot_label.grid(row=4, column=0, columnspan=6, padx=10, pady=10)
 
     def start_processing(self):
         if self.running:
@@ -73,6 +80,9 @@ class DiceApp:
         if changed and last_frame is not None and not self.processor.is_seekable:
             self.cnn.add_sample(current_dot=current_dot,last_frame=last_frame ,background=self.processor.background)
         if changed:
+            if self.last_second is None or second - self.last_second > 20:
+                result = self.dice_game.check_result(second, current_dot)
+                self.bet_result_label.config(text=f"{result}")
             predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background)
             predict_next_dots = [int(pd) for pd in predict_dots]
             predict_confidences = np.around(confidences, decimals=4)
@@ -83,8 +93,7 @@ class DiceApp:
             confidence_str = confidence_str.strip('[]')
             self.dot_label.config(text=f"{second}当前：{current_dot}预测: {predict_next_dots}预测置信度: {confidence_str}")
             self.show_image(frame)
-            if self.last_second is None or second - self.last_second > 25:
-                self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
+            self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
 
     def show_image(self, frame):
         # 使用 OpenCV 缩放图像到 640x640
