@@ -1,5 +1,7 @@
 import os
 import matplotlib.pyplot as plt
+
+from logger import LogManager
 from video_processor import DiceVideoProcessor
 from pathlib import Path  # 增加导入
 
@@ -26,8 +28,9 @@ def main():
     # video_path = "C:\\Users\\fred\\Desktop\\Fred\\bg-game\\video_1741004387.flv"
 
     # 修改后代码
+    logger = LogManager.setup()
     folder = Path("C:\\Users\\fred\\Desktop\\Fred\\bg-game")
-    processor = DiceVideoProcessor()
+    processor = DiceVideoProcessor(logger=logger)
     print("正在处理视频...")
     roi = [514, 134, 224, 224]
     # 获取所有flv文件（包括子目录）

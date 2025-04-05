@@ -1,7 +1,7 @@
 import os
-import time
 import traceback
 import random
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -14,6 +14,7 @@ class DiceOnlineVideoProcessor:
         self.url = None
         self.is_seekable = True
         self.background = None
+        self.background_angle_diff = 0
         self.running = False
         self.cap = None
         self.fps = None
@@ -249,11 +250,70 @@ class DiceOnlineVideoProcessor:
             mean = np.mean(frames, axis=0).astype(np.float32)
             std_dev = np.std(frames, axis=0).astype(np.float32)
             median_frame = np.median(frames, axis=0).astype(np.uint8)
-
             # 背景融合策略
             background = np.where(std_dev < 100, median_frame, mean).astype(np.uint8)
             background = cv2.medianBlur(background, 5)
             self.background = background
-            cv2.imwrite(f"output/background_{second}_{dot}.jpg", background)
-            self.logger.info("background calculated")
+
+            sum_angles = 0
+            for frame in self.background_frames:
+                sum_angles += self.get_angle(frame)
+            avg_angle = sum_angles / len(self.background_frames)
+            self.background_angle_diff = round(avg_angle - 90)
+            current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            background_path = f"output/background_{self.background_angle_diff}_{current_time}.jpg"
+            cv2.imwrite(background_path, background)
+            self.logger.info(f"background saved to {background_path}")
             self.background_frames.clear()
+    def get_angle(self,image):
+        # 转换到HSV颜色空间
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # 定义优化的紫色范围
+        lower_purple = np.array([120, 60, 60])  # 扩大H通道范围
+        upper_purple = np.array([160, 255, 255])
+
+        # 提取紫色区域
+        mask = cv2.inRange(hsv, lower_purple, upper_purple)
+
+        # 形态学优化（使用椭圆核进行闭运算）
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        # 查找紫色区域的轮廓
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # 确保找到至少一个轮廓
+        if len(contours) > 0:
+            # 取最大的轮廓（通常是骰钟罩子的轮廓）
+            largest_contour = max(contours, key=cv2.contourArea)
+
+            # 拟合椭圆
+            ellipse = cv2.fitEllipse(largest_contour)
+
+            # 解析椭圆参数
+            center, axes, angle = ellipse
+            center_x, center_y = center
+            major_axis, minor_axis = axes
+            rotation_angle = angle
+
+            # print(f"椭圆中心: ({center_x:.2f}, {center_y:.2f})")
+            # print(f"半长轴: {major_axis / 2:.2f}")
+            # print(f"半短轴: {minor_axis / 2:.2f}")
+            # print(f"旋转角度: {rotation_angle:.2f} 度")
+
+            # 绘制拟合的椭圆
+            image_with_ellipse = image.copy()
+            cv2.ellipse(image_with_ellipse, ellipse, (0, 255, 0), 2)
+
+            # 显示结果
+            # cv2.imshow('Original Image', image)
+            # cv2.imshow('Purple Mask', mask)
+            # cv2.imshow('Detected Ellipse', image_with_ellipse)
+            # cv2.waitKey(0)
+            # cv2.destroyAllWindows()
+            return rotation_angle
+
+        else:
+            print("未检测到紫色区域的轮廓！")
+            return 90

@@ -1,73 +1,130 @@
-import pandas as pd
-import torch
-import torch.nn as nn
-import torch.optim as optim
 from matplotlib import pyplot as plt
-from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import os
-import logging
-from torch.optim.lr_scheduler import StepLR
+from collections import defaultdict
+from scipy.spatial import KDTree
+import yaml
+from pathlib import Path
 
 from video_processor import DiceVideoProcessor
-
 dice_classifier = None
 
+
+
+dice_classifier = None
 
 def get_cnn_instance():
     global dice_classifier
     if dice_classifier is None:
-        dice_classifier = DiceClassifier()
+        dice_classifier = FeatureAnalyzer()
     return dice_classifier
 
-# 配置日志记录
-logging.basicConfig(filename='training.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# 自定义数据集类
-class DiceDataset(Dataset):
-    def __init__(self, folder_path):
+"""
+特征数组各列定义：
+0: x坐标
+1: y坐标 
+2: 宽度w
+3: 高度h
+4: current_dot (当前点数)
+5: 其他特征
+6: next_dot (下一个点数)
+"""
+class FeatureAnalyzer:
+    def __init__(self, folder_path='train/features'):
         self.folder_path = folder_path
-        self.files = [f for f in os.listdir(folder_path) if f.endswith('.npy')]
-        # 直接加载数据到内存
-        self.data_arrays = [np.load(os.path.join(folder_path, f)) for f in self.files]
-        # 保持原有统计量计算逻辑...
-        self.mean, self.std = self._calculate_stats(folder_path)
-        # 启用内存映射
-        # self.mmaps = [np.load(f'{folder_path}/{f}', mmap_mode='r') for f in self.files]
+        self.zero,self.pos,self.neg = self.load_combined_features()
+        self.config = self.load_config()
+        # 构建 KDTree
+        # 修正后（使用中心坐标）
+        zero_points = np.column_stack((
+            self.zero[:, 0] + self.zero[:, 2] / 2,  # x_center = x + w/2
+            self.zero[:, 1] + self.zero[:, 3] / 2  # y_center = y + h/2
+        )) if self.zero.size > 0 else np.array([])
 
-    def __len__(self):
-        return len(self.files)
+        pos_points = np.column_stack((
+            self.pos[:, 0] + self.pos[:, 2] / 2,
+            self.pos[:, 1] + self.pos[:, 3] / 2
+        )) if self.pos.size > 0 else np.array([])
 
-    # 修正后的统计量计算逻辑
-    def _calculate_stats(self, folder_path):
+        neg_points = np.column_stack((
+            self.neg[:, 0] + self.neg[:, 2] / 2,
+            self.neg[:, 1] + self.neg[:, 3] / 2
+        )) if self.neg.size > 0 else np.array([])
+        if zero_points.size > 0:
+            self.zero_tree = KDTree(zero_points)
+        else:
+            self.zero_tree = None
+        if pos_points.size > 0:
+            self.pos_tree = KDTree(pos_points)
+        else:
+            self.pos_tree = None
+        if neg_points.size > 0:
+            self.neg_tree = KDTree(neg_points)
+        else:
+            self.neg_tree = None
 
-        train_files = self.files[:int(0.7 * len(self.files))]  # 仅使用训练集部分
-        sampled_files = np.random.choice(train_files,
-                                         size=min(2000, len(train_files)), replace=False)
-        all_features = []
-        for f in sampled_files[:1000]:
-            array = np.load(os.path.join(folder_path, f))
-            all_features.append(array[:-1])
-        return np.mean(all_features, axis=0), np.std(all_features, axis=0) + 1e-6
+    def load_features_by_prefix(self,folder_path='features'):
+        # 初始化三个列表暂存不同类别的特征
+        zero_list = []
+        negative_list = []
+        positive_list = []
 
-    def __getitem__(self, idx):
-        array = self.data_arrays[idx]  # 创建可写副本
-        label = array[-1]
-        feature_vector = array[:-1].copy()  # 显式创建副本
-        #feature_vector += np.random.normal(0, 0.1, size=feature_vector.shape)
-        # feature_vector = array[:532]
-        # label = int(array[-1])
-        label = int(self.files[idx].split('_')[0])-1  # 标签从0开始
-        # 添加数据增强
-        if np.random.rand() > 0.5:
-            feature_vector += np.random.normal(0, 0.01, size=feature_vector.shape)
-        feature_vector = (feature_vector - self.mean) / self.std
-        return torch.tensor(feature_vector, dtype=torch.float32), torch.tensor(label, dtype=torch.long)
-        # x = array[4] + array[0]  # 根据实际特征位置调整索引
-        # y = array[5] + array[1]
-        # return torch.tensor([x, y,array[2],array[3],array[6]], dtype=torch.float32), torch.tensor(label, dtype=torch.long)
+        for filename in os.listdir(folder_path):
+            if filename.endswith('.npy'):
+                file_path = os.path.join(folder_path, filename)
 
-    def plot_all_label_heatmaps(self):
+                # 提取前缀数字（基于你的原始实现）
+                try:
+                    num = int(filename.split('_')[0])
+                    feature = np.load(file_path)
+
+                    if num == 0:
+                        zero_list.append(feature)
+                    elif num < 0:
+                        negative_list.append(feature)
+                    else:
+                        positive_list.append(feature)
+                except (ValueError, IndexError):
+                    continue  # 忽略不符合命名规范的文件
+
+        # 将列表转换为numpy数组（按行堆叠）
+        return (
+            np.vstack(zero_list) if zero_list else np.array([]),
+            np.vstack(positive_list) if positive_list else np.array([]),
+            np.vstack(negative_list) if negative_list else np.array([])
+
+        )
+
+    def save_combined_features(self,zero_arr, pos_arr, neg_arr, save_path='features_combined.npz'):
+        """
+        将三个特征数组合并保存到单个压缩文件中
+        :param zero_arr: 0前缀特征数组
+        :param neg_arr: 负数前缀特征数组
+        :param pos_arr: 正数前缀特征数组
+        :param save_path: 保存路径，默认当前目录
+        """
+        np.savez_compressed(
+            save_path,
+            zero_features=zero_arr,
+            positive_features=pos_arr,
+            negative_features=neg_arr
+        )
+
+    def load_combined_features(self,file_path='features_combined.npz'):
+        """ 从npz文件加载所有特征 """
+        data = np.load(file_path)
+        return (
+            data['zero_features'],
+            data['positive_features'],
+            data['negative_features']
+
+        )
+
+
+
+    # 修改后（适配numpy数组结构）
+    def plot_all_label_heatmaps(self, data):
+        """ label_type: 'zero'/'pos'/'neg' 对应不同类别 """
         labels = [0, 1, 2]
         fig, axs = plt.subplots(1, len(labels), figsize=(30, 8))
 
@@ -75,16 +132,19 @@ class DiceDataset(Dataset):
             x_coords = []
             y_coords = []
 
-            for j in range(len(self)):
-                sample = self[j]
-                if sample['label'].item() == label:
-                    x, y = sample['coordinates']
+            for j in range(len(data)):
+                d = data[j]
+                current_dot = d[4]
+                next_dot = d[-1]
+                if label == 1 and current_dot==next_dot or label == 2 and current_dot+next_dot==7 or label==0 and current_dot!=next_dot and current_dot+next_dot!=7:
+                    x = d[0] + d[2] / 2
+                    y = d[1] + d[3] / 2
                     x_coords.append(x)
                     y_coords.append(y)
 
             # 绘制热力图
             hb = axs[i].hexbin(x_coords, y_coords,
-                               gridsize=56,
+                               gridsize=int(112),
                                cmap='Oranges',  # 更改为Blues颜色映射
                                mincnt=1,
                                extent=[0, 224, 0, 224])  # 设置x和y的范围
@@ -102,7 +162,7 @@ class DiceDataset(Dataset):
         plt.tight_layout()
         plt.show()
 
-    def get_heatmap_data(self):
+    def get_heatmap_data(data):
         labels = [0, 1, 2]
         heatmap_data = []
 
@@ -110,8 +170,8 @@ class DiceDataset(Dataset):
             x_coords = []
             y_coords = []
 
-            for j in range(len(self)):
-                sample = self[j]
+            for j in range(len(data)):
+                sample = data[j]
                 if sample['label'].item() == label:
                     x, y = sample['coordinates']
                     x_coords.append(x)
@@ -137,314 +197,192 @@ class DiceDataset(Dataset):
 
         return heatmap_data
 
-    def plot_all_label_heatmaps_to_table(self):
-        heatmap_data = self.get_heatmap_data()
-        labels = [0, 1, 2]
+    def load_config(self):
+        """加载配置文件"""
+        config_path = Path(__file__).parent / 'config.yaml'
+        if not config_path.exists():
+            raise FileNotFoundError(f"配置文件 {config_path} 不存在")
 
-        for i, label in enumerate(labels):
-            df = pd.DataFrame(heatmap_data[i], columns=['X Coordinate', 'Y Coordinate', 'Point Density'])
-            print(f"Coordinate Distribution for Label={label}")
-            print(df.head())  # 打印前几行数据
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        return config
 
-            # 保存为CSV文件
-            df.to_csv(f'label_{label}_heatmap_data.csv', index=False)
+    def reload_config(self):
+        """重新加载配置文件"""
+        self.config = self.load_config()
 
+    def find_nearby_samples(self, target_x, target_y, radius=5, angle_diff=0):
+        """查找指定坐标半径范围内的样本"""
+        the_tree = self.zero_tree
+        samples  = self.zero
+        if angle_diff<=-1:
+            the_tree = self.neg_tree
+            samples = self.neg
+        elif angle_diff>=1:
+            the_tree = self.pos_tree
+            samples = self.pos
+        if the_tree is None:
+            return []
+        indices = the_tree.query_ball_point([target_x, target_y], radius)
+        return [samples[i] for i in indices]
 
-    def __getitem__0(self, idx):
-        array = self.data_arrays[idx]
-        # 假设特征向量结构为：[x, y, 其他特征..., 当前点数]
-        x = array[4]+array[0]  # 根据实际特征位置调整索引
-        y = array[5]+array[1]
-        current_dot = int(self.files[idx].split('_')[1][0])  # 倒数第二个位置是当前点数
-        next_dot = int(self.files[idx].split('_')[0])  # 文件名中的目标点数
-        label = 0
-        if current_dot==next_dot:
-            label = 1
-        elif current_dot+next_dot == 7:
-            label = 2
-        return {
-            'label': torch.tensor(label, dtype=torch.long),
-            'coordinates': (x, y),
-            'shap':(array[2],array[3])
-        }
+    def _predict(self, target_x, target_y, current_dot, angle_diff=0, min_rate=0.2):
+        state = {}
+        rule_counts = defaultdict(int)
+        results = {}
+        # 遍历不同的半径范围
+        radius_values = self.config.get('radius_values', [2, 3, 4])
+        for r in radius_values:
+            # 修正后的循环结构示意
+            nearby = self.find_nearby_samples(target_x, target_y, r, angle_diff)
+            if not nearby:
+                continue
 
-class TransitionModel(nn.Module):
-    def __init__(self, input_dim=272):  # 修改输入维度为4
-        super().__init__()
-        self.model = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.BatchNorm1d(512),  # 添加批量归一化
-            nn.GELU(),
-            nn.Dropout(0.5),  # 增强正则化
+            # 重新初始化当前半径的统计量
+            dot_nexts = defaultdict(int)
+            dot_same = dot_seven = dot_other = 0
+            dot_counts = defaultdict(int)
 
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.GELU(),
-            nn.Dropout(0.4),
+            for sample in nearby:
+                next_dot = sample[-1]
+                current_sample_dot = int(sample[4])  # 类型转换
 
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.GELU(),
+                dot_nexts[next_dot] += 1
+                if current_sample_dot == next_dot:
+                    dot_same += 1
+                elif current_sample_dot + next_dot == 7:
+                    dot_seven += 1
+                else:
+                    dot_other += 1
 
-            nn.Linear(128, 6)
-        )
-        self._init_weights()
-        # 初始化权重
+                if current_sample_dot == current_dot:
+                    dot_counts[next_dot] += 1
 
-    def _init_weights(self):
-        def _init_weights(self):
-            for m in self.modules():
-                if isinstance(m, nn.Linear):
-                    # 将nonlinearity参数改为relu（PyTorch官方支持）
-                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-                    # 或者使用更普适的初始化方式
-                    # nn.init.xavier_normal_(m.weight, gain=nn.init.calculate_gain('gelu'))
-                    nn.init.constant_(m.bias, 0.1)
-    def forward(self, x):
-        return self.model(x)
+            total = len(nearby)
+            if total < 3:
+                continue
 
+            # 计算概率
+            next_probs = {k: v / total for k, v in dot_nexts.items()}
+            most_dot = max(next_probs, key=next_probs.get)
 
+            # 当前点数出现时下次出现次数最多的点数
+            current_most_dot = max(dot_counts, key=lambda k: dot_counts[k]) if dot_counts else None
+            current_most_prob = dot_counts[current_most_dot] if current_most_dot else 0
 
-class DiceClassifier:
-    def __init__(self, input_size=272,  # 修改输入维度为4
-                 hidden_sizes=[256,128,64],
-                 num_classes=6,
-                 batch_size=32,
-                 num_epochs=100,
-                 learning_rate=0.0001):
-        self.input_size = input_size
-        self.hidden_sizes = hidden_sizes
-        self.num_classes = num_classes
-        self.batch_size = batch_size
-        self.num_epochs = num_epochs
-        self.learning_rate = learning_rate
+            state[r] = {
+                'total': total,
+                'same_prob': dot_same / total,
+                'seven_prob': dot_seven / total,
+                'other_prob': dot_other / total,
+                'current_total': sum(dot_counts),
+                'current_most_dot': current_most_dot,
+                'current_most_prob': current_most_prob,
+                'next_most_dot': most_dot,
+                'next_most_prob': next_probs.get(most_dot),
+            }
 
-        self.mean = None
-        self.std = None
-        # 模型、损失函数和优化器
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = TransitionModel().to(self.device)  # 修改模型输入维度
-        # 使用更好的优化器
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate,
-                                     weight_decay=1e-4)  # 调整权重衰减
-        # 改进学习率调度
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='max', factor=0.5, patience=3, verbose=True)
-        # self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        #     self.optimizer, T_max=50)
-        # 添加类别权重处理
-        self.criterion = nn.CrossEntropyLoss()
-        weight_path = self.weight_path = 'dice_transition1_model.pth'
-        if os.path.exists(weight_path):
-            self.load_model(weight_path)
-            logging.info(f"Loaded model weights from {weight_path}")
-        else:
-            logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
+            final_rule = None
+            if state[r]['same_prob'] > min_rate and state[r]['same_prob'] >= state[r]['seven_prob']:
+                final_rule = {
+                    'next': current_dot,
+                    'prob': state[r]['same_prob'],
+                    'sample': state[r]['total'],
+                    'rule': 1,
+                    'radius': r,
+                }
+            elif state[r]['seven_prob'] > min_rate and state[r]['seven_prob'] >= state[r]['same_prob']:
+                final_rule = {
+                    'next': 7 - current_dot,
+                    'prob': state[r]['seven_prob'],
+                    'sample': state[r]['total'],
+                    'rule': 2,
+                    'radius': r,
+                }
 
-    def train(self,folder_path ):
-        self.raw_dataset = DiceDataset(folder_path)  # 保存完整数据集
-        dataset = self.raw_dataset  # 使用完整数据集
+            if final_rule:
+                print(final_rule)
+                results[r] = final_rule
+                rule_counts[final_rule['next']] += 1
 
-        train_size = int(0.7 * len(dataset))
-        val_size = int(0.15 * len(dataset))
-        test_size = len(dataset) - train_size - val_size
-        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
-            dataset, [train_size, val_size, test_size]
-        )
-        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True)
-        test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=True)
-        # 在初始化中添加
+        # 选择出现次数最多的预测结果
+        if rule_counts:
+            max_count = max(rule_counts.values())
+            if max_count == 1:
+                all_candidates = [r for r in results.values()]
+                sorted_by_rule = sorted(all_candidates, key=lambda x: x['rule'])
+                return sorted_by_rule[0] if sorted_by_rule else None
+            else:
+                candidates = [k for k, v in rule_counts.items() if v == max_count]
+                best_next = max(
+                    candidates,
+                    key=lambda x: max(r['prob'] for r in results.values() if r['next'] == x)
+                )
+                best_result = max(
+                    (r for r in results.values() if r['next'] == best_next),
+                    key=lambda x: x['prob']
+                )
+                return best_result
+        return None
 
-        self.early_stop_patience = 10
-        self.best_epoch = 0
-        best_val_acc = 0.0
-        self.model.train()
-        scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else torch.amp.GradScaler('cpu')
-        for epoch in range(self.num_epochs):
-            running_loss = 0.0
-            correct = 0
-            total = 0
-
-            for images, labels in train_loader:
-                images, labels = images.to(self.device), labels.to(self.device)
-
-                self.optimizer.zero_grad()
-                with torch.amp.autocast('cuda' if self.device.type == 'cuda' else 'cpu'):
-                    outputs = self.model(images)
-                    loss = self.criterion(outputs, labels)
-
-                scaler.scale(loss).backward()
-
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 新增梯度裁剪
-                scaler.step(self.optimizer)
-                scaler.update()
-
-                running_loss += loss.item()
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-
-            epoch_loss = running_loss / len(train_loader)
-            epoch_acc = correct / total
-            logging.info(f'Epoch [{epoch + 1}/{self.num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
-
-            # ===== 验证阶段 =====
-            self.model.eval()
-
-            val_loss = 0.0
-            val_correct = 0
-            val_total = 0
-
-            with torch.no_grad():
-                for images, labels in val_loader:
-                    images, labels = images.to(self.device), labels.to(self.device)
-
-                    outputs = self.model(images)
-                    loss = self.criterion(outputs, labels)
-
-                    val_loss += loss.item()
-                    _, predicted = torch.max(outputs.data, 1)
-                    val_total += labels.size(0)
-                    val_correct += (predicted == labels).sum().item()
-
-            # 计算验证指标
-            val_epoch_loss = val_loss / len(val_loader)
-            val_epoch_acc = val_correct / val_total
-            # 记录日志（添加验证指标）
-            logging.info(f'Epoch [{epoch + 1}/{self.num_epochs}], '
-                         f'Train Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f} | '
-                         f'Val Loss: {val_epoch_loss:.4f}, Val Acc: {val_epoch_acc:.4f}')
-
-            # 根据验证指标保存最佳模型
-            if val_epoch_acc > best_val_acc:
-                best_val_acc = val_epoch_acc
-                torch.save(self.model.state_dict(), self.weight_path)
-                logging.info(f'New best model saved with val acc: {best_val_acc:.4f}')
-
-            # scheduler.step()  # 更新学习率 #StepLR是按固定周期调整，而ReduceLROnPlateau依赖于某个指标的变化
-
-            self.scheduler.step(val_epoch_acc)
-        self.analyze_features(self.raw_dataset)
-        self.test(test_loader)
-
-    # 在DiceClassifier中添加
-    def analyze_features(self, dataset):
-        # 创建包含多个样本的批量数据
-        sample_indices = list(range(min(32, len(dataset))))  # 使用前32个样本
-        batch = [dataset[i] for i in sample_indices]
-        inputs = torch.stack([x for x, _ in batch]).to(self.device)
-
-        # 保存原始模式并切换为评估模式
-        original_mode = self.model.training
-        self.model.eval()
-
-        with torch.no_grad():
-            activations = []
-
-            def get_activation(name):
-                def hook(model, input, output):
-                    activations.append(output.detach().cpu())
-
-                return hook
-
-            # 注册hook以获取每一层的输出
-            hooks = []
-            for name, layer in self.model.named_modules():
-                if isinstance(layer, nn.Linear):  # 只收集线性层的输出
-                    hook = layer.register_forward_hook(get_activation(name))
-                    hooks.append(hook)
-
-            _ = self.model(inputs)  # 输入批量数据
-
-            # 移除hook
-            for hook in hooks:
-                hook.remove()
-
-            # 绘制每个样本的激活分布
-            plt.figure(figsize=(12, 6))
-            for i, act in enumerate(activations):
-                plt.subplot(1, len(activations), i + 1)
-                plt.hist(act.flatten(), bins=50, alpha=0.5)
-                plt.title(f'Layer {i + 1}')
-            plt.show()
-
-        # 恢复原始训练模式
-        self.model.train(original_mode)
-
-    def test(self,test_loader):
-        self.model.eval()
-        with torch.no_grad():
-            correct = 0
-            total = 0
-            for inputs, labels in test_loader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)  # 确保数据在同一个设备上
-                outputs = self.model(inputs)
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-            test_accuracy = correct / total
-            logging.info(f'Test Accuracy: {test_accuracy:.4f}')
-            print(f'Test Accuracy: {test_accuracy:.4f}')
-
-    def save_model(self, path):
-        torch.save(self.model.state_dict(), path)
-
-    def load_model(self, path):
-        self.model.load_state_dict(torch.load(path, map_location=self.device))
-    def predict(self, frame:np.ndarray, background):
-
+    def predict(self, frame: np.ndarray, background,angle_diff=0):
         video_processor = DiceVideoProcessor(background)
-        features = video_processor.detect_dice_feature(frame)
+        features = video_processor.extract_simple_feature(frame)
         if features is None:
+            return None, None
+        x = features[2] / 2 + features[0]  # 根据实际特征位置调整索引
+        y = features[3] / 2 + features[1]
+        result = self._predict(x, y, int(features[4]),angle_diff=angle_diff)
+        if result:
+            return result['next'], result['prob']
+        else:
+            return None, None
+
+    def predict_image_top(self, frame: np.ndarray, background, n=6, angle_diff=0):
+        if background is None:
             return [], []
-        features = (features - self.mean) / self.std
-        # 添加batch维度
-        x = features[4] + features[0]  # 根据实际特征位置调整索引
-        y = features[5] + features[1]
-        input_tensor = torch.tensor([x, y, features[2], features[3], features[6]], dtype=torch.float32).unsqueeze(0).to(self.device)
+        next, prob = self.predict(frame, background,angle_diff=angle_diff)
+        if next:
+            # 计算其他点数的概率
+            other_prob = (1 - prob) / 5
+            # 创建前N个预测结果及其概率
+            topN_class = [next] + [i for i in range(1, 7) if i != next][:n - 1]
+            topN_prob = [prob] + [other_prob] * (n - 1)
+            return topN_class, topN_prob
+        else:
+            return [], []
 
-        # input_tensor = torch.tensor(features, dtype=torch.float32).unsqueeze(0).to(self.device)
-
-        self.model.eval()
-        with torch.no_grad():
-            outputs = self.model(input_tensor)
-            # 移除batch维度
-            probs = torch.softmax(outputs.squeeze(0), dim=-1)
-            max_prob, pred = torch.max(probs, dim=-1)
-            return pred.item()+1, max_prob.item()
-    def predict_image_top(self, frame: np.ndarray, background=None, n=6):
+    def add_sample(self, current_dot, last_frame, background):
         if background is None:
             return [], []
         video_processor = DiceVideoProcessor(background)
-        features = video_processor.detect_dice_feature(frame)
+        features = video_processor.detect_dice_feature(last_frame)
         if features is None:
             return [], []
-        input_tensor = torch.tensor(features, dtype=torch.float32).unsqueeze(0).to(self.device)
+        x = features[2] / 2 + features[0]  # 根据实际特征位置调整索引
+        y = min(features[3] / 2, features[2] / 2) + features[1]
+        shape_feat = (features[2], features[3])
+        self.samples.append({
+            'coordinates': (x, y),
+            'shape': shape_feat,
+            'current_dot': features[6],
+            'next_dot': current_dot
+        })
+        self.save_samples()
 
-        self.model.eval()
-        with torch.no_grad():
-            outputs = self.model(input_tensor)  # 移除了隐藏状态的接收
-            if outputs.dim() == 2:  # 现在输出是(batch=1, classes)
-                outputs = outputs.squeeze(0)
-
-            softmax = nn.Softmax(dim=0)
-            probabilities = softmax(outputs).cpu().numpy()
-
-            # 获取前N个结果
-            topN_indices = np.argpartition(probabilities, -n)[-n:]
-            topN_class = topN_indices[np.argsort(probabilities[topN_indices])][::-1]
-            topN_prob = probabilities[topN_class]
-
-        return topN_class+1, topN_prob
 
 
 if __name__ == "__main__":
-    # dataset = DiceDataset(folder_path='train/features')
-    # dataset.plot_all_label_heatmaps()
+    analyzer = FeatureAnalyzer()
+    # analyzer.plot_all_label_heatmaps(analyzer.zero)
+    # analyzer.plot_all_label_heatmaps(analyzer.pos)
+    # analyzer.plot_all_label_heatmaps(analyzer.neg)
     # dataset.plot_all_label_heatmaps_to_table()
 
+    analyzer._predict(112, 112, 1, 0)
+    analyzer._predict(112, 112, 1, -1)
+    analyzer._predict(112, 112, 1, 1)
     # dataset.plot_dot_distribution()
-    classifier = DiceClassifier()
-    classifier.train(folder_path='train/features')
+    # classifier = DiceClassifier()
+    # classifier.train(folder_path='train/features')
 

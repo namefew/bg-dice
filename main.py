@@ -5,7 +5,7 @@ from tkinter import ttk, filedialog
 import numpy as np
 from PIL import Image, ImageTk
 
-import feature_analyzer
+import dice_classifier_1
 import dice_game
 from config_file_watcher import start_file_watcher
 from logger import LogManager
@@ -17,7 +17,7 @@ class DiceApp:
 
         self.root = root
         self.root.title("Dice Video Processor")
-        self.cnn = feature_analyzer.get_cnn_instance()
+        self.cnn = dice_classifier_1.get_cnn_instance()
         observer = start_file_watcher(self.cnn)
 
         self.roi = [514, 134, 224, 224]
@@ -83,7 +83,7 @@ class DiceApp:
             if self.last_second is None or second - self.last_second > 20:
                 result = self.dice_game.check_result(second, current_dot)
                 self.bet_result_label.config(text=f"{result}")
-            predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background)
+            predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
             predict_next_dots = [int(pd) for pd in predict_dots]
             predict_confidences = np.around(confidences, decimals=4)
             # 将数组转换为字符串

@@ -1,116 +1,84 @@
 import os
-import time
-import json
-from concurrent.futures import ThreadPoolExecutor
+import random
+from datetime import datetime
 
 import cv2
 import numpy as np
 import torch
 
 import train_resnet
+from logger import LogManager
+
 
 class DiceVideoProcessor:
-    def __init__(self,background=None):
+    def __init__(self,background=None,logger=None):
         self.background = background
-        self.dice_positions = []
-        self.dice_results = []
-        self.cnn = train_resnet.get_cnn_instance()
+        if logger is None:
+            logger = LogManager.setup()
+        self.logger=logger
 
-    def _process_frame(self, frame, mean, M2, frame_count):
-        frame_float = frame.astype(np.float32)
-        delta = frame_float - mean
-        mean += delta / (frame_count + 1)
-        delta2 = frame_float - mean
-        M2 += delta * delta2
-        return mean, M2
+        self.cnn = train_resnet.get_cnn_instance()
+        self.background_frames = []  # 滑动窗口背景缓冲区
+        self.background_angle_diff = 0
+        self.last_frame = None
+        self.last_dot = None
+        self.output_folder = 'images'
+        self.features = []
 
     def _save_first_frame(self, video_path,output_folder='images'):
         cap = cv2.VideoCapture(video_path)
         ret, frame = cap.read()
         cap.release()
-        output_path = f'{output_folder}/frame0.jpg'
+        angle = self.get_angle(frame)
+        angle_diff = round(angle - 90)
+        output_path = f'{output_folder}/frame0_{angle_diff}.jpg'
         if ret:
             cv2.imwrite(output_path, frame)
             print(f"首帧图片已保存到 {output_path}")
         else:
             raise ValueError("无法读取指定帧")
-    def _calculate_median(self, cap, roi, n=100):
-        """使用滑动窗口计算中位数（内存优化版）"""
-        frames = []
-        median = None
-        step = max(1, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) // n)
 
-        for i in range(0, n * step, step):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-            ret, frame = cap.read()
-            if ret:
-                if roi:
+    def _extract_background(self, video_path, output_folder='images', num_frames=50, roi=None,second=0):
+        if self.background is None:
+            self._save_first_frame(video_path, output_folder)
+        if len(self.background_frames) < num_frames:
+            cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            start = int(fps*second)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            num_frames = min(num_frames, total_frames)
+            step = int(15*fps) #间隔15秒采样
+            for i in range(start, total_frames, step):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if roi is not None:
                     x, y, w, h = roi
                     frame = frame[y:y + h, x:x + w]
-                if len(frames) < 30:  # 滑动窗口保持30帧
-                    frames.append(frame)
-                else:
-                    frames[i % 30] = frame  # 循环覆盖旧帧
-                median = np.median(frames, axis=0).astype(np.uint8) if frames else None
-
-        return median
-
-
-    def _extract_background(self, video_path, output_folder='images', num_frames=50, roi=None):
-        self._save_first_frame(video_path, output_folder)
-        cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        num_frames = min(num_frames, total_frames)
-        # 使用累积法代替全帧存储
-        mean = None
-        M2 = None
-        frame_count = 0
-        # 随机采样帧（减少重复区域影响）
-        step = int(total_frames/num_frames)
-        frames = []
-        for i in range(0, total_frames, step):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if roi is not None:
-                x, y, w, h = roi
-                frame = frame[y:y + h, x:x + w]
-            frames.append(frame)
-            if len(frames)>=num_frames:
-                break
+                self.background_frames.append(frame)
+                if len(self.background_frames)>=num_frames:
+                    break
         # 初始化mean和M2为全零数组
-        if frames:
-            first_frame = frames[0].astype(np.float32)
-            mean = np.zeros_like(first_frame)
-            M2 = np.zeros_like(first_frame)
-
-        with ThreadPoolExecutor() as executor:
-            futures = []
-            for frame in frames:
-                future = executor.submit(self._process_frame, frame, mean.copy(), M2.copy(), frame_count)
-                futures.append(future)
-            for idx, future in enumerate(futures):
-                mean, M2 = future.result()
-                frame_count += 1
-        # 计算标准差
-        std_dev = np.sqrt(M2 / (frame_count - 1)) if frame_count > 1 else np.zeros_like(mean)
-
-        # 使用中位数代替均值（更抗噪）
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        median_frame = self._calculate_median(cap, roi, n=num_frames)
-
+        frames = self.background_frames
+        mean = np.mean(frames, axis=0).astype(np.float32)
+        std_dev = np.std(frames, axis=0).astype(np.float32)
+        median_frame = np.median(frames, axis=0).astype(np.uint8)
         # 背景融合策略
-        background = np.where(std_dev < 50, median_frame, mean).astype(np.uint8)
+        background = np.where(std_dev < 100, median_frame, mean).astype(np.uint8)
         background = cv2.medianBlur(background, 5)
         self.background = background
-        # 获取视频文件的basename
-        video_basename = os.path.basename(video_path)
-        video_name, _ = os.path.splitext(video_basename)
-        # 保存背景图像时包含视频文件的basename
-        output_path = f"{output_folder}/background_{video_name}.jpg"
-        cv2.imwrite(output_path, background)
+
+        sum_angles = 0
+        for frame in frames:
+            sum_angles += self.get_angle(frame)
+        avg_angle = sum_angles / len(self.background_frames)
+        self.background_angle_diff = round(avg_angle - 90)
+        current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+        background_path = f"output/background_{self.background_angle_diff}_{current_time}.jpg"
+        cv2.imwrite(background_path, background)
+        self.logger.info(f"background saved to {background_path}")
+        self.background_frames.clear()
         cap.release()
         return self.background
 
@@ -118,20 +86,16 @@ class DiceVideoProcessor:
     def detect_dice_feature(self, frame):
         dot, confidence = self.cnn.predict_image(frame)
         dice_roi,region = self.__extract_dice(frame)
+        angle = self.get_angle(frame)
+        angle_diff = round(angle-90)
+        if angle_diff !=self.background_angle_diff:
+            print("角度和背景图片的不一样")
         if dice_roi is not None:
             x1, y1, w1, h1 = region
-            w = frame.shape[1]
-            h = frame.shape[0]
-            # # 提取特征（位置、大小、角度等）
-            # features0 = self.cnn.extract_features_from_image(frame)
             features = self._extract_features(dice_roi, x1 , y1 , w1 , h1 , dot)
-            # features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
             features = features.numpy() if isinstance(features, torch.Tensor) else features
-            # 合并特征数组
-            # combined_features = np.concatenate((features0.flatten(), features))
-            #
-            # return combined_features
-            return features
+            combined_features = np.concatenate((features.flatten(), [self.background_angle_diff]))
+            return combined_features
         return None
 
     def _extract_features(self, dice_roi, x, y, w, h, dot):
@@ -157,7 +121,7 @@ class DiceVideoProcessor:
         # lbp_hist = self._extract_texture(dice_roi)
 
         # 提取形状特征 (Hu矩)
-        hu_moments = self._extract_shape_features(dice_roi)
+        hu_moments = self._extract_hu_moments(dice_roi)
 
         # 提取边缘特征 (Canny)
         edges = cv2.Canny(gray, 50, 150)
@@ -170,7 +134,6 @@ class DiceVideoProcessor:
             angle_vector = [np.cos(theta), np.sin(theta)]
         else:
             angle_vector = [0.0, 0.0]
-
         # 返回特征向量
         features = {
             "position": (x, y),
@@ -190,71 +153,60 @@ class DiceVideoProcessor:
 
         return np.array(flat_features, dtype=np.float32)
 
-    def _extract_texture(self, roi):
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        lbp = self.local_binary_pattern(gray)
-        hist, _ = np.histogram(lbp, bins=256, range=(0, 256))
-        return hist
+    def get_angle(self,image):
+        # 转换到HSV颜色空间
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    def local_binary_pattern(self, image, P=8, R=1, method='uniform'):
-        """
-        计算图像的局部二值模式 (LBP) 特征。
+        # 定义优化的紫色范围
+        lower_purple = np.array([120, 60, 60])  # 扩大H通道范围
+        upper_purple = np.array([160, 255, 255])
 
-        参数:
-            image: 输入灰度图像。
-            P: 邻域采样点数，默认为8。
-            R: 邻域半径，默认为1。
-            method: LBP 方法类型，默认为 'uniform'。
+        # 提取紫色区域
+        mask = cv2.inRange(hsv, lower_purple, upper_purple)
 
-        返回:
-            lbp_image: 计算得到的 LBP 图像。
-        """
-        # 确保输入图像为灰度图像
-        if len(image.shape) > 2:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # 形态学优化（使用椭圆核进行闭运算）
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # 初始化 LBP 图像
-        lbp_image = np.zeros_like(image)
+        # 查找紫色区域的轮廓
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 获取图像尺寸
-        height, width = image.shape
+        # 确保找到至少一个轮廓
+        if len(contours) > 0:
+            # 取最大的轮廓（通常是骰钟罩子的轮廓）
+            largest_contour = max(contours, key=cv2.contourArea)
 
-        # 遍历图像中的每个像素
-        for y in range(R, height - R):
-            for x in range(R, width - R):
-                center = image[y, x]
-                pattern = []  # 显式初始化 pattern 为列表
+            # 拟合椭圆
+            ellipse = cv2.fitEllipse(largest_contour)
 
-                # 计算邻域内的像素值
-                for i in range(P):
-                    angle = 2 * np.pi * i / P
-                    x_neighbor = int(x + R * np.cos(angle))
-                    y_neighbor = int(y + R * np.sin(angle))
+            # 解析椭圆参数
+            center, axes, angle = ellipse
+            center_x, center_y = center
+            major_axis, minor_axis = axes
+            rotation_angle = angle
 
-                    if x_neighbor >= 0 and x_neighbor < width and y_neighbor >= 0 and y_neighbor < height:
-                        neighbor = image[y_neighbor, x_neighbor]
-                        pattern.append(1 if neighbor >= center else 0)
-                    else:
-                        pattern.append(0)
+            # print(f"椭圆中心: ({center_x:.2f}, {center_y:.2f})")
+            # print(f"半长轴: {major_axis / 2:.2f}")
+            # print(f"半短轴: {minor_axis / 2:.2f}")
+            # print(f"旋转角度: {rotation_angle:.2f} 度")
 
-                # 将二进制模式转换为整数
-                lbp_value = sum([pattern[i] << i for i in range(P)])
+            # 绘制拟合的椭圆
+            image_with_ellipse = image.copy()
+            cv2.ellipse(image_with_ellipse, ellipse, (0, 255, 0), 2)
 
-                # 处理 'uniform' 方法
-                if method == 'uniform':
-                    # 使用更简洁的方式计算 transitions
-                    pattern_shifted = pattern[1:] + pattern[:1]
-                    transitions = sum(np.array(pattern) != np.array(pattern_shifted))
-                    if transitions <= 2:
-                        lbp_value = sum([pattern[i] << i for i in range(P)])
-                    else:
-                        lbp_value = P + 1
+            # 显示结果
+            # cv2.imshow('Original Image', image)
+            # cv2.imshow('Purple Mask', mask)
+            # cv2.imshow('Detected Ellipse', image_with_ellipse)
+            # cv2.waitKey(0)
+            # cv2.destroyAllWindows()
+            return rotation_angle
 
-                lbp_image[y, x] = lbp_value
+        else:
+            print("未检测到紫色区域的轮廓！")
+            return 90
 
-        return lbp_image
-
-    def _extract_shape_features(self, roi):
+    def _extract_hu_moments(self, roi):
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -324,121 +276,154 @@ class DiceVideoProcessor:
             last_dot = dot
         cap.release()
 
-    def _process_video(self, video_path, roi=None,output_folder='train/images',step_second=17):
-        """处理整个视频，提取骰子状态序列"""
-        if self.background is None:
-            self._extract_background(video_path, roi=roi)
-        video_filename = os.path.basename(video_path)
-        base, _ = os.path.splitext(video_filename)
-        # output_folder = os.path.join(output_folder, video_filename.split('.')[0])
-        img0_folder=f'{output_folder}/../images0'
-        img_folder=f'{output_folder}/../images'
+    def _process_video(self, video_path, roi=None,output_folder='train/images',step_second=15):
+        self.output_folder = output_folder
         os.makedirs(output_folder, exist_ok=True)
-        os.makedirs(img0_folder, exist_ok=True)
-        os.makedirs(img_folder, exist_ok=True)
+
+        self._extract_background(video_path, roi=roi,second=0)
+        next_update_background = 3600  # 1小时的帧数
+
         cap = cv2.VideoCapture(video_path)
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame0 = None
-        last_frame = None
-        last_i = None
-        last_dot = None
-        for i in range(0, total_frames, fps * step_second):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-            ret, frame = cap.read()
+        second = 0
+        n = step_second
+        while True:
+            second += n
+            if second * fps > total_frames:
+                # self.logger.info(f"已到达视频末尾，停止处理")
+                break
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * second))
+            ret, frame = cap.retrieve()
             if not ret:
+                # self.logger.info("Failed to read frame")
                 break
             if roi is not None:
                 x, y, w, h = roi
                 frame = frame[y:y + h, x:x + w]
-            dot = self._recognize_dice_value(frame)
-            if dot == 0 or dot is None:
-                continue
-            if last_dot is None:
-                last_dot = dot
-                last_frame = frame
-                continue
-            if dot != last_dot:
-                if last_i is None or i - last_i > 20:
-                    dice_frame,poi = self.__extract_dice(last_frame)
-                    if dice_frame is not None:
-                        x1,y1,w1,h1=poi
-                        if 60 >= w1 >= 30 and 60 >= h1 >= 30:
-                            cv2.imwrite(f'{img0_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', dice_frame)
-                            cv2.imwrite(f'{img_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',last_frame)
-                            # features0 = self.cnn.extract_features_from_image(last_frame)
-                            features = self._extract_features(dice_frame, x1, y1 , w1 , h1, last_dot)
-                            # features0 = features0.numpy() if isinstance(features0, torch.Tensor) else features0
-                            features = features.numpy() if isinstance(features, torch.Tensor) else features
-                            classify = dot-1
-                            # 合并特征数组
-                            combined_features = np.concatenate(( features, [classify]))
-                            # 保存合并后的特征向量
-                            feature_file_path = f'{output_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.npy'
-                            np.save(feature_file_path, combined_features)
-                    last_i = i
-            elif dot == last_dot:
-                diff = cv2.absdiff(frame, last_frame)
-                gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-                gray_diff[:80, :]=0
-                _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
-                non_zero_pixels = cv2.countNonZero(thresh)
-                if non_zero_pixels > 300:  # 假设100个像素的变化可以忽略
-                    if last_i is None or i - last_i > 10:
-                        dice_frame0, poi0 = self.__extract_dice(frame)
-                        if poi0 is not None:
-                            x0, y0, w0, h0 = poi0
-                            if 60 >= w0 >= 30 and 60 >= h0 >= 30:
-                                dice_frame, poi = self.__extract_dice(last_frame)
-                                if dice_frame is not None:
-                                    x1, y1, w1, h1 = poi
-                                    if 60 >= w1 >= 30 and 60 >= h1 >= 30:
-                                        # cv2.imwrite(f'{output_folder}/{dot}_{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg', frame)
-                                        cv2.imwrite(
-                                            f'{img0_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
-                                            dice_frame)
-                                        cv2.imwrite(
-                                            f'{img_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.jpg',
-                                            last_frame)
-
-                                        # features0 = self.cnn.extract_features_from_image(last_frame)
-                                        features = self._extract_features(dice_frame, x1, y1, w1 , h1,
-                                                                          last_dot)
-                                        # features0 = features0.numpy() if isinstance(features0,torch.Tensor) else features0
-                                        features = features.numpy() if isinstance(features, torch.Tensor) else features
-                                        classify = dot - 1
-                                        # 合并特征数组
-                                        combined_features = np.concatenate(( features, [classify]))
-                                        # 保存合并后的特征向量
-                                        feature_file_path = f'{output_folder}/{dot}_{last_dot}-{x1}_{y1}_{w1}_{h1}_{i / fps}_{base}.npy'
-                                        np.save(feature_file_path, combined_features)
-                last_i = i
-            last_frame = frame
-            last_dot = dot
+            if second>next_update_background:
+                self._extract_background(video_path, roi=roi,second=second)
+                next_update_background = next_update_background+3600
+            second = self.next_frame(frame, second)
         cap.release()
+        #将提取的features保存到文件
+        video_filename = os.path.basename(video_path)
+        base, _ = os.path.splitext(video_filename)
 
+        # 转换为 NumPy 数组
+        features_array = np.array(self.features, dtype=np.float32)
+        folder_path = 'features'
+        num = 0
+        if not os.path.exists(folder_path):
+            print(f"文件夹 {folder_path} 不存在")
+            num = 0
+        else:
+            npy_files = [f for f in os.listdir(folder_path) if f.endswith('.npy')]
+            num = len(npy_files)
+        self.save_features(features_array, f'features/{self.background_angle_diff}_{base}_{num+1}.npy')
+        self.features  = []
 
+    def next_frame(self, frame, second):
+        """处理每一秒采样的帧图像"""
+        dot, cf = self.cnn.predict_image(frame)
+        if dot == 0:
+            # self.logger.info(f"{second} 检测骰子在动: {dot}")
+            return second + random.randint(2, 4)
+        if cf < 0.97:
+            self.logger.info(f"{second}检测骰子点数:{dot} 置信度 {cf:.4f} 太小 ")
+            # cv2.imwrite(f"{self.image_dir}/{dot}_{second}_{cf:.4f}.jpg", frame)
+            return second
+        # self.logger.info(f"{second}检测骰子点数:{dot} 置信度 {cf:.4f}")
+        if self.last_dot is None:
+            self.last_dot = dot
+            self.last_frame = frame
+            return second
+        changed = False
+        if dot != self.last_dot:
+            changed = True
+            self.logger.info(f"{second}检测骰子点数变动: {self.last_dot} ==> {dot}")
+        if not changed and self.last_frame is not None:
+            diff = cv2.absdiff(frame, self.last_frame)
+            gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+            gray_diff[0:80, :] = 0
+            _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
+            non_zero_pixels = cv2.countNonZero(thresh)
+            if non_zero_pixels > 200:
+                changed = True
+                self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
+        if changed:
+            self.extract_feature_and_save(self.last_frame,dot)
+        self.last_frame = frame
+        self.last_dot = dot
+        return second
 
-    def _calculate_movement(self, current, previous):
-        """计算两帧之间骰子的移动量"""
-        curr_pos = current["position"]
-        prev_pos = previous["position"]
-        return np.sqrt((curr_pos[0] - prev_pos[0]) ** 2 + (curr_pos[1] - prev_pos[1]) ** 2)
+    def extract_simple_feature(self,frame):
+        if frame is not None:
+            dot, confidence = self.cnn.predict_image(frame)
+            if confidence>=0.97:
+                dice_roi, region = self.__extract_dice(frame)
+                if region is not None:
+                    angle = self.get_angle(frame)
+                    x, y, w, h = region
+                    angle_diff = round(angle - 90)
+                    feature = [
+                        x, y, w, h, dot, angle_diff
+                    ]
+                    return feature
+        return None
 
-    def _extract_dice(self, frame):
-        """检测骰子的位置"""
-        if self.background is None:
-            raise ValueError("请先提取背景")
-        # 计算当前帧与背景的差异
-        diff = cv2.absdiff(frame, self.background)
-        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    def extract_feature_and_save(self,last_frame,current_dot):
+        if last_frame is not None:
+            last_dot, confidence = self.cnn.predict_image(last_frame)
+            dice_roi, region = self.__extract_dice(last_frame)
+            if dice_roi is not None:
+                angle = self.get_angle(last_frame)
+                x, y, w, h = region
+                angle_diff = round(angle - 90)
+                feature = [
+                    x, y, w, h, last_dot, angle_diff,current_dot
+                ]
+                flat_features = np.array(feature, dtype=np.float32)
+                current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+                cv2.imwrite(
+                    f"{self.output_folder}/{last_dot}_{current_dot}_{x}_{y}_{w}_{h}_{current_time}_{self.background_angle_diff}.jpg",
+                    dice_roi)
+                self.features.append(flat_features)
+        return None
 
-        # 自适应直方图均衡化（CLAHE）
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray_diff)
-        return enhanced,None
+    def load_features(self, input_path):
+        """
+        从 .npy 文件中加载 features
+        :param input_path: 输入文件路径
+        :return: 加载的 NumPy 数组
+        """
+        # 确保文件存在
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"File not found: {input_path}")
 
-    def __extract_dice(self,frame):
+        # 从 .npy 文件中加载数据
+        features = np.load(input_path)
+        print(f"Features loaded from {input_path}")
+        return features
+
+    def save_features(self, features, output_path):
+        """
+        将 features 保存到 .npy 文件
+        :param features: 要保存的特征数据，通常是 NumPy 数组
+        :param output_path: 输出文件路径
+        """
+        if not isinstance(features, np.ndarray):
+            raise ValueError("features 必须是 NumPy 数组")
+
+        # 确保输出目录存在
+        if os.path.dirname(output_path)!='':
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        # 保存到 .npy 文件
+        np.save(output_path, features)
+        print(f"Features saved to {output_path}")
+
+    def __extract_dice0(self,frame):
         """检测骰子的位置"""
         if self.background is None:
             raise ValueError("请先提取背景")
@@ -482,6 +467,7 @@ class DiceVideoProcessor:
 
             if valid_contours:
                 # 找到最大的轮廓（假设是骰子）
+
                 max_contour = max(valid_contours, key=cv2.contourArea)
                 x, y, w, h = cv2.boundingRect(max_contour)
 
@@ -492,6 +478,57 @@ class DiceVideoProcessor:
                 # return brightened,(x,y,w,h)
         return None,None
 
+    def __extract_dice(self, frame):
+        """检测骰子的位置"""
+        if self.background is None:
+            raise ValueError("请先提取背景")
+
+        # 计算当前帧与背景的差异
+        diff = cv2.absdiff(frame, self.background)
+        diff[0:80, :] = 0  # 裁剪顶部区域
+        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+
+        # 自适应直方图均衡化（CLAHE）
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray_diff)
+
+        # 自适应阈值（结合OTSU算法）
+        _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # 形态学开运算去噪
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+        # 进一步去除投影（闭运算）
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))  # 调整核大小
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+        # 寻找轮廓
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            # 筛选符合条件的轮廓
+            valid_contours = []
+            for contour in contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                if 60 >= w >= 30 and 60 >= h >= 30:  # 宽高范围
+                    area = cv2.contourArea(contour)
+                    perimeter = cv2.arcLength(contour, True)
+                    if perimeter > 0:  # 防止除零错误
+                        circularity = 4 * np.pi * area / (perimeter ** 2)
+                        if 0.5 <= circularity <= 1.0:  # 筛选近似矩形的轮廓
+                            valid_contours.append(contour)
+
+            if valid_contours:
+                # 找到最大的轮廓（假设是骰子）
+                max_contour = max(valid_contours, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(max_contour)
+
+                # 提取骰子区域
+                dice_roi = frame[y:y + h, x:x + w]
+                return dice_roi, (x, y, w, h)
+
+        return None, None
     def _recognize_dice_value(self, frame,cnf=0.97):
         """识别骰子点数"""
         # 这里需要实现骰子点数识别算法
