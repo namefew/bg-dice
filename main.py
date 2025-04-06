@@ -95,7 +95,7 @@ class DiceApp:
             self.dot_label.config(text=f"{second}当前：{current_dot}预测: {predict_next_dots}预测置信度: {confidence_str}")
             self.show_image(frame)
             bets = self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
-            if not self.processor.is_seekable and len(bets)>0:
+            if bets is not None and not self.processor.is_seekable and len(bets)>0:
                 self.send_hotkey(bets, second)
 
     def send_hotkey(self, bets, second):
