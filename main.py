@@ -77,7 +77,7 @@ class DiceApp:
             self.processor.stop_process()
 
     def process_frame(self, frame, second, current_dot, changed,last_frame):
-        if changed and last_frame is not None and not self.processor.is_seekable or self.processor.is_force_add_sample():
+        if changed and last_frame is not None and not self.processor.is_seekable or self.cnn.is_force_add_sample():
             self.cnn.add_sample(current_dot=current_dot,last_frame=last_frame ,background=self.processor.background,angle_diff=self.processor.background_angle_diff)
         if changed:
             if self.last_second is None or second - self.last_second > 20:
