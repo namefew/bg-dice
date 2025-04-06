@@ -1,0 +1,16 @@
+{
+    "radius_values": [1, 2],
+    "is_force_add_sample": false,
+    "hotkeys": {
+        "1点": "num1",
+        "2点": "num2",
+        "3点": "num3",
+        "4点": "num4",
+        "5点": "num5",
+        "6点": "num6",
+        "大": "num9",
+        "小": "num0",
+        "单": "num7",
+        "双": "num8"
+    }
+}

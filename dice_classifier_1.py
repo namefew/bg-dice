@@ -3,9 +3,8 @@ import numpy as np
 import os
 from collections import defaultdict
 from scipy.spatial import KDTree
-import yaml
-from pathlib import Path
 
+import config
 from video_processor import DiceVideoProcessor
 dice_classifier = None
 
@@ -33,7 +32,7 @@ class FeatureAnalyzer:
     def __init__(self, folder_path='train/features'):
         self.folder_path = folder_path
         self.zero,self.pos,self.neg = self.load_combined_features()
-        self.config = self.load_config()
+        self.config = config.get_instance()
         # 构建 KDTree
         # 修正后（使用中心坐标）
         zero_points = np.column_stack((
@@ -198,19 +197,6 @@ class FeatureAnalyzer:
 
         return heatmap_data
 
-    def load_config(self):
-        """加载配置文件"""
-        config_path = Path(__file__).parent / 'config.yaml'
-        if not config_path.exists():
-            raise FileNotFoundError(f"配置文件 {config_path} 不存在")
-
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        return config
-
-    def reload_config(self):
-        """重新加载配置文件"""
-        self.config = self.load_config()
 
     def find_nearby_samples(self, target_x, target_y, radius=5, angle_diff=0):
         """查找指定坐标半径范围内的样本"""

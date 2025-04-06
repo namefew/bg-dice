@@ -5,9 +5,9 @@ from tkinter import ttk, filedialog
 import numpy as np
 from PIL import Image, ImageTk
 
+import config
 import dice_classifier_1
 import dice_game
-from config_file_watcher import start_file_watcher
 from logger import LogManager
 from online_video_processor import DiceOnlineVideoProcessor
 
@@ -18,7 +18,7 @@ class DiceApp:
         self.root = root
         self.root.title("Dice Video Processor")
         self.cnn = dice_classifier_1.get_cnn_instance()
-        observer = start_file_watcher(self.cnn)
+        config.start_file_watcher()
 
         self.roi = [514, 134, 224, 224]
         self.save_frame_count = 0

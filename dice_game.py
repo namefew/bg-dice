@@ -1,6 +1,8 @@
 from enum import Enum
 
 import numpy as np
+import config
+import pyautogui
 
 
 class BetType(Enum):
@@ -111,4 +113,17 @@ class DiceGame:
             self.current_bets = self.new_bets(type, predict_next_dots, predict_confidences,min_exp=min_exp)
             self.total_bets += sum(bet.bet_value for bet in self.current_bets)
             self.logger.info(f"{second} 下注: {[str(bet) for bet in self.current_bets]}")
+            if len(current_dot)>0 :
+                hotkeys = config.get_instance().get('hotkeys', {})
+                for bet in self.current_bets:
+                    if bet.bet_type.display_name in hotkeys:
+                        hotkey = hotkeys[bet.bet_type.display_name]
+                        self.logger.info(f"{second} 下注【 {bet.bet_type.display_name}】模拟按键【{hotkey}】")
+                        #模拟按快捷键
+                        try:
+                            pyautogui.press(hotkey.lower())  # 统一转小写处理
+                            self.logger.info(f"{second} 已模拟按下【{hotkey}】进行 {bet.bet_type.display_name} 下注")
+                        except Exception as e:
+                            self.logger.warning(f"热键 {hotkey} 模拟失败: {str(e)}")
+
             self.last_second = second
