@@ -5,6 +5,8 @@ from datetime import datetime
 
 import cv2
 import numpy as np
+
+import config
 import train_resnet
 import threading
 
@@ -127,11 +129,12 @@ class DiceOnlineVideoProcessor:
     def process_video(self):
         self.logger.info(f"视频处理线程已启动,url: {self.url}")
         second = 0
-        n = 15 if self.is_seekable else 7
+        step = int(config.get_instance().get('step_second', 15))
+
         try:
             while self.running:
                 # start = time.time()
-                second += n
+                second += step
                 if self.is_seekable:  # 本地文件模式
                     if second * self.fps > self.total_frames:
                         self.logger.info(f"已到达视频末尾，停止处理")
@@ -139,7 +142,7 @@ class DiceOnlineVideoProcessor:
                         return
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(self.fps * second))
                 else:  # 实时流模式
-                    for _ in range(int(self.fps * n)):
+                    for _ in range(int(self.fps * step)):
                         ret, frame = self.cap.read()
                         if not ret:
                             if self.is_seekable:
