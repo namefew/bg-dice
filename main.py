@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 import numpy as np
+import pyautogui
 from PIL import Image, ImageTk
 
 import config
@@ -93,7 +94,21 @@ class DiceApp:
             confidence_str = confidence_str.strip('[]')
             self.dot_label.config(text=f"{second}当前：{current_dot}预测: {predict_next_dots}预测置信度: {confidence_str}")
             self.show_image(frame)
-            self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
+            bets = self.dice_game.check_bets(second,self.type_combobox.get(), current_dot, predict_next_dots,predict_confidences,min_exp=1)
+            if not self.processor.is_seekable and len(bets)>0:
+                self.send_hotkey(bets, second)
+
+    def send_hotkey(self, bets, second):
+        hotkeys = config.get_instance().get('hotkeys', {})
+        for bet in bets:
+            if bet.bet_type.display_name in hotkeys:
+                hotkey = hotkeys[bet.bet_type.display_name]
+                self.logger.info(f"{second} 下注【 {bet.bet_type.display_name}】模拟按键【{hotkey}】")
+                # 模拟按快捷键
+                try:
+                    pyautogui.press(hotkey.lower())  # 统一转小写处理
+                except Exception as e:
+                    self.logger.warning(f"热键 {hotkey} 模拟失败: {str(e)}")
 
     def show_image(self, frame):
         # 使用 OpenCV 缩放图像到 640x640

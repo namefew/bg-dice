@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from watchdog.observers import Observer
@@ -36,7 +37,7 @@ class Config:
     def load_config(self):
         """加载配置文件"""
         config_path = self.file_path
-        if not config_path.exists():
+        if not os.path.exists(config_path):
             raise FileNotFoundError(f"配置文件 {config_path} 不存在")
 
         with open(self.file_path, 'r', encoding='utf-8') as f:
