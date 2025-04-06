@@ -22,6 +22,9 @@ class FeatureAnalyzer:
         self.load_samples()
         self.config = self.load_config()
         # 构建 KDTree
+        self.build_kdtree()
+
+    def build_kdtree(self):
         all_points = np.array([
             [s['coordinates'][0], s['coordinates'][1]]
             for s in self.samples
@@ -31,6 +34,7 @@ class FeatureAnalyzer:
             self.tree = KDTree(all_points)
         else:
             self.tree = None
+
     def _load_all_samples(self):
         """加载所有.npy文件并提取关键特征"""
         samples = []
@@ -328,6 +332,7 @@ class FeatureAnalyzer:
             'current_dot': features[6],
             'next_dot': current_dot
         })
+        self.build_kdtree()
         self.save_samples()
 
 # 使用示例

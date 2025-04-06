@@ -62,7 +62,8 @@ class FeatureAnalyzer:
             self.neg_tree = KDTree(neg_points)
         else:
             self.neg_tree = None
-
+    def is_force_add_sample(self):
+        return self.config.get('force_add_sample', False)
     def load_features_by_prefix(self,folder_path='features'):
         # 初始化三个列表暂存不同类别的特征
         zero_list = []
@@ -352,24 +353,50 @@ class FeatureAnalyzer:
         else:
             return [], []
 
-    def add_sample(self, current_dot, last_frame, background):
+    def add_sample(self, current_dot, last_frame, background, angle_diff=0):
         if background is None:
-            return [], []
+            return
         video_processor = DiceVideoProcessor(background)
         features = video_processor.detect_dice_feature(last_frame)
         if features is None:
-            return [], []
-        x = features[2] / 2 + features[0]  # 根据实际特征位置调整索引
-        y = min(features[3] / 2, features[2] / 2) + features[1]
-        shape_feat = (features[2], features[3])
-        self.samples.append({
-            'coordinates': (x, y),
-            'shape': shape_feat,
-            'current_dot': features[6],
-            'next_dot': current_dot
-        })
-        self.save_samples()
+            return
 
+        # 确定样本类别
+        sample_type = 'zero'
+        if angle_diff <= -1:
+            sample_type = 'neg'
+        elif angle_diff >= 1:
+            sample_type = 'pos'
+
+        # 构造新样本特征数组
+        new_sample = np.array([
+            features[0],  # x
+            features[1],  # y
+            features[2],  # w
+            features[3],  # h
+            features[6],  # current_dot（根据特征定义第6列）
+            features[5],  # 其他特征
+            current_dot  # next_dot
+        ])
+
+        # 更新特征数组
+        target_array = getattr(self, sample_type)
+        if target_array.size == 0:
+            target_array = new_sample.reshape(1, -1)
+        else:
+            target_array = np.vstack([target_array, new_sample])
+        setattr(self, sample_type, target_array)
+
+        # 重新构建对应类别的 KDTree
+        points = np.column_stack((
+            target_array[:, 0] + target_array[:, 2] / 2,
+            target_array[:, 1] + target_array[:, 3] / 2
+        ))
+        tree_name = f"{sample_type}_tree"
+        setattr(self, tree_name, KDTree(points) if points.size > 0 else None)
+
+        # 保存更新后的特征数据
+        self.save_combined_features(self.zero, self.pos, self.neg)
 
 
 if __name__ == "__main__":
