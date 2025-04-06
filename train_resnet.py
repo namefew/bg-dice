@@ -10,12 +10,10 @@ from PIL import Image  # 明确导入 PIL.Image
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-import logging
 
 from torchvision.models import resnet18, ResNet18_Weights
 
 # 设置日志记录
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 dice_classifier = None
 def get_cnn_instance():
     global dice_classifier
@@ -84,9 +82,9 @@ class CNN():
         weight_path = self.weight_path = 'dice_model_resnet.pth'
         if os.path.exists(weight_path):
             self.model.load_state_dict(torch.load(weight_path, map_location=self.device))
-            logging.info(f"Loaded model weights from {weight_path}")
+            print(f"Loaded model weights from {weight_path}")
         else:
-            logging.info(f"Model weights file {weight_path} not found. Starting with random weights.")
+            print(f"Model weights file {weight_path} not found. Starting with random weights.")
 
 
     def _normalize_lighting(self, image):
@@ -151,7 +149,7 @@ class CNN():
 
             epoch_loss = running_loss / len(train_loader)
             epoch_acc = correct / total
-            logging.info(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
+            print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}')
 
             # ===== 验证阶段 =====
             model.eval()
@@ -176,7 +174,7 @@ class CNN():
             val_epoch_loss = val_loss / len(val_loader)
             val_epoch_acc = val_correct / val_total
             # 记录日志（添加验证指标）
-            logging.info(f'Epoch [{epoch + 1}/{num_epochs}], '
+            print(f'Epoch [{epoch + 1}/{num_epochs}], '
                          f'Train Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f} | '
                          f'Val Loss: {val_epoch_loss:.4f}, Val Acc: {val_epoch_acc:.4f}')
 
@@ -184,7 +182,7 @@ class CNN():
             if val_epoch_acc > best_val_acc:
                 best_val_acc = val_epoch_acc
                 torch.save(model.state_dict(), self.weight_path)
-                logging.info(f'New best model saved with val acc: {best_val_acc:.4f}')
+                print(f'New best model saved with val acc: {best_val_acc:.4f}')
 
             # scheduler.step()  # 更新学习率 #StepLR是按固定周期调整，而ReduceLROnPlateau依赖于某个指标的变化
 
@@ -304,7 +302,7 @@ class CNN():
                 image_path = os.path.join(image_dir, filename)
                 predicted_class, confidence = self.predict_image_path(image_path)
                 if confidence <0.99:
-                    logging.info(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
+                    print(f'File: {filename}, Predicted Class: {predicted_class}, Confidence: {confidence:.4f}')
                 new_filename = f'{predicted_class }_{filename[2:]}'
                 # new_filename = f'{filename[:1]}_{predicted_class }{filename[3:]}'
                 new_image_path = os.path.join(image_dir, new_filename)
@@ -312,8 +310,8 @@ class CNN():
                     correct += 1
                     continue
                 os.rename(image_path, new_image_path)
-                logging.info(f'need to renamed {filename} to: {new_filename}')
-        logging.info(f'Accuracy: {correct / total:.4f}')
+                print(f'need to renamed {filename} to: {new_filename}')
+        print(f'Accuracy: {correct / total:.4f}')
 
 # 程序入口
 if __name__ == "__main__":
