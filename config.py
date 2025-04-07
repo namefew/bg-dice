@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 
 from watchdog.observers import Observer
@@ -15,7 +16,7 @@ def get_instance():
 def start_file_watcher():
     event_handler = ConfigFileHandler()
     observer = Observer()
-    observer.schedule(event_handler, path=str(Path(__file__).parent), recursive=False)
+    observer.schedule(event_handler, path=".", recursive=False)
     observer.start()
     print("正在监听配置文件更改...")
     return observer

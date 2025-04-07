@@ -1,8 +1,6 @@
 from enum import Enum
 
 import numpy as np
-import config
-import pyautogui
 
 
 class BetType(Enum):
@@ -27,6 +25,8 @@ class BetType(Enum):
         return self.odds if win else -1
 
     def expectation(self,prediction_dict):
+        if prediction_dict is None or len(prediction_dict)==0:
+            return 0
         sum_exp = 0
         for i in self.wind_dots:
             sum_exp += prediction_dict.get(i) * (self.odds+1)
@@ -104,7 +104,7 @@ class DiceGame:
                     self.min_win = self.total_win
                 self.logger.info(f"{second}秒 结果:{current_dot}点 下注:{[str(bet) for bet in self.current_bets]} 盈利:{result:.2f} ")
                 self.logger.info(f"当前盈利: {self.total_win*100/self.total_bets:.2f}% 最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f} 下注量：{self.total_bets} 总盈利：{self.total_win}")
-        return f"当前盈利: {self.total_win*100/max(1,self.total_bets):.2f}% 最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f} 下注量：{self.total_bets} 总盈利：{self.total_win}"
+        return f"当前盈利: {self.total_win*100/max(1,self.total_bets):.2f}% 最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f} 下注量：{self.total_bets} 总盈利：{self.total_win:.2f}"
     def check_bets(self, second, type, current_dot, predict_next_dots,predict_confidences,min_exp = 1.00):
         if self.last_second is None or second - self.last_second > 20:
             confidence_str = np.array2string(predict_confidences, separator=', ',

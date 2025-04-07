@@ -9,6 +9,7 @@ from PIL import Image, ImageTk
 import config
 import dice_classifier_1
 import dice_game
+from dice_classifier_big_odd import BigOddClassifier
 from logger import LogManager
 from online_video_processor import DiceOnlineVideoProcessor
 
@@ -19,6 +20,7 @@ class DiceApp:
         self.root = root
         self.root.title("Dice Video Processor")
         self.cnn = dice_classifier_1.get_cnn_instance()
+        self.bigodd_cnn = BigOddClassifier()
         config.start_file_watcher()
 
         self.roi = [514, 134, 224, 224]
@@ -41,7 +43,7 @@ class DiceApp:
         # 类型下拉框
         self.type_label = ttk.Label(self.root, text="类型:")
         self.type_label.grid(row=1, column=0, padx=10, pady=0)
-        self.type_combobox = ttk.Combobox(self.root, textvariable=self.type_var, values=['1子', '2子', '3子', '大/小', '单/双', '大/小&单/双'])
+        self.type_combobox = ttk.Combobox(self.root, textvariable=self.type_var, values=['1子', '大/小', '单/双', '大/小&单/双'])
         self.type_combobox.grid(row=1, column=1, padx=10, pady=0)
         self.type_combobox.current(0)  # 设置默认值为第一个选项
 
@@ -84,7 +86,7 @@ class DiceApp:
             if self.last_second is None or second - self.last_second > 20:
                 result = self.dice_game.check_result(second, current_dot)
                 self.bet_result_label.config(text=f"{result}")
-            predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
+            predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff) if self.type_combobox.get() == '1子' else self.bigodd_cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
             predict_next_dots = [int(pd) for pd in predict_dots]
             predict_confidences = np.around(confidences, decimals=4)
             # 将数组转换为字符串

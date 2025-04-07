@@ -319,7 +319,7 @@ class FeatureAnalyzer:
             return None, None
         x = features[2] / 2 + features[0]  # 根据实际特征位置调整索引
         y = features[3] / 2 + features[1]
-        result = self._predict(x, y, int(features[4]),angle_diff=angle_diff)
+        result = self._predict(x, y, int(features[4]),angle_diff=angle_diff, min_rate=config.get_instance().get('single_min_rate',0.2))
         if result:
             return result['next'], result['prob']
         else:

@@ -1,7 +1,5 @@
 {
     "step_second": 15,
-    "radius_values": [1, 2],
-    "is_force_add_sample": false,
     "hotkeys": {
         "1点": "num1",
         "2点": "num2",
@@ -13,5 +11,9 @@
         "小": "num0",
         "单": "num7",
         "双": "num8"
-    }
+    },
+    "radius_values": [1, 2],
+    "is_force_add_sample": false,
+    "single_min_rate": 0.2,
+    "min_rate": 0.6
 }
