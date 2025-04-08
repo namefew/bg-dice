@@ -206,8 +206,9 @@ class DiceOnlineVideoProcessor:
             if non_zero_pixels > 100:
                 changed = True
                 self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
-        for callback in self.next_frame_callbacks:
-            callback(frame, second, dot, changed,self.last_frame)
+        if changed:
+            for callback in self.next_frame_callbacks:
+                callback(frame, second, dot, changed,self.last_frame)
         self.last_frame = frame
         self.last_dot = dot
         return second
@@ -223,7 +224,7 @@ class DiceOnlineVideoProcessor:
         if self.background is not None:
             if self.is_seekable:
                 return
-            if changed and len(self.background_frames)<30:
+            if changed and len(self.background_frames)<60:
                 self.background_frames.append(frame)
                 return
         if self.is_seekable:
