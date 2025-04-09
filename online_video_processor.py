@@ -202,18 +202,10 @@ class DiceOnlineVideoProcessor:
             gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
             gray_diff[0:80, :] = 0
             _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
-            # 形态学开运算去噪
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-            contours, hierarchy = cv2.findContours(thresh, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                # 筛选符合条件的轮廓
-                for contour in contours:
-                    x, y, w, h = cv2.boundingRect(contour)
-                    if 60 >= w >= 30 and 60 >= h >= 30:
-                        changed = True
-                        self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
-                        break
+            non_zero_pixels = cv2.countNonZero(thresh)
+            if non_zero_pixels > 400:
+                changed = True
+                self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
         if changed:
             for callback in self.next_frame_callbacks:
                 callback(frame, second, dot, changed,self.last_frame)
