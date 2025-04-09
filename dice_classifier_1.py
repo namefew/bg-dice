@@ -61,6 +61,12 @@ class FeatureAnalyzer:
             self.neg_tree = KDTree(neg_points)
         else:
             self.neg_tree = None
+        self.all = np.concatenate([arr for arr in [self.zero, self.pos, self.neg] if arr.size > 0])
+        all_points = np.column_stack((
+            self.all[:, 0] + self.all[:, 2] / 2,
+            self.all[:, 1] + self.all[:, 3] / 2
+        )) if self.neg.size > 0 else np.array([])
+        self.all_tree = KDTree(all_points)
     def is_force_add_sample(self):
         return self.config.get('force_add_sample', False)
     def load_features_by_prefix(self,folder_path='features'):
@@ -208,6 +214,10 @@ class FeatureAnalyzer:
         elif angle_diff>=1:
             the_tree = self.pos_tree
             samples = self.pos
+
+        if config.get_instance().get('use_all_samples', True):
+            the_tree = self.all_tree
+            samples = self.all
         if the_tree is None:
             return []
         indices = the_tree.query_ball_point([target_x, target_y], radius)
@@ -381,6 +391,12 @@ class FeatureAnalyzer:
         tree_name = f"{sample_type}_tree"
         setattr(self, tree_name, KDTree(points) if points.size > 0 else None)
 
+        self.all.add(new_sample)
+        all_points = np.column_stack((
+            self.all[:, 0] + self.all[:, 2] / 2,
+            self.all[:, 1] + self.all[:, 3] / 2
+        ))
+        self.all_tree = KDTree(all_points)
         # 保存更新后的特征数据
         self.save_combined_features(self.zero, self.pos, self.neg)
 

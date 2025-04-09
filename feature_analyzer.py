@@ -286,7 +286,7 @@ class FeatureAnalyzer:
             return result['next'], result['prob']
         else:
             return None,None
-    def predict_image_top(self, frame: np.ndarray, background, n=6):
+    def predict_image_top(self, frame: np.ndarray, background, n=6,angle_diff=0):
         if background is None:
             return [], []
         next, prob = self.predict(frame, background)

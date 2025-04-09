@@ -9,6 +9,7 @@ from PIL import Image, ImageTk
 import config
 import dice_classifier_1
 import dice_game
+import feature_analyzer
 from dice_classifier_big_odd import BigOddClassifier
 from logger import LogManager
 from online_video_processor import DiceOnlineVideoProcessor
@@ -19,6 +20,7 @@ class DiceApp:
 
         self.root = root
         self.root.title("Dice Video Processor")
+        self.old_cnn = feature_analyzer.get_cnn_instance()
         self.cnn = dice_classifier_1.get_cnn_instance()
         self.bigodd_cnn = BigOddClassifier()
         config.start_file_watcher()
@@ -86,7 +88,13 @@ class DiceApp:
             if self.last_second is None or second - self.last_second > 20:
                 result = self.dice_game.check_result(second, current_dot)
                 self.bet_result_label.config(text=f"{result}")
-            predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff) if self.type_combobox.get() == '1子' else self.bigodd_cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
+            if self.type_combobox.get() == '1子':
+                if config.get_instance().get('use_old_classifier', False):
+                    predict_dots,confidences = self.old_cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
+                else:
+                    predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
+            else:
+                self.bigodd_cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
             predict_next_dots = [int(pd) for pd in predict_dots]
             predict_confidences = np.around(confidences, decimals=4)
             # 将数组转换为字符串
