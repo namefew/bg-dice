@@ -196,6 +196,7 @@ class DiceOnlineVideoProcessor:
         changed = False
         if dot != self.last_dot:
             changed = True
+            self.last_second = second
             self.logger.info(f"{second}检测骰子点数变动: {self.last_dot} ==> {dot}")
         if not changed and self.last_frame is not None:
             diff = cv2.absdiff(frame, self.last_frame)
@@ -203,8 +204,9 @@ class DiceOnlineVideoProcessor:
             gray_diff[0:80, :] = 0
             _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
             non_zero_pixels = cv2.countNonZero(thresh)
-            if non_zero_pixels > 400:
+            if non_zero_pixels > 200 and (self.last_second is None or second - self.last_second > 25):
                 changed = True
+                self.last_second = second
                 self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
         if changed:
             for callback in self.next_frame_callbacks:

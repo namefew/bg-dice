@@ -22,6 +22,7 @@ class DiceVideoProcessor:
         self.background_angle_diff = 0
         self.last_frame = None
         self.last_dot = None
+        self.last_second = None
         self.output_folder = 'images'
         self.features = []
 
@@ -255,7 +256,7 @@ class DiceVideoProcessor:
                 last_frame = frame
                 continue
             if dot != last_dot:
-                if last_i is None or i - last_i > 20:
+                if last_i is None or i - last_i > 25:
                     cv2.imwrite(f'{output_folder}/{dot}_{last_dot}-{i / fps}_{base}.jpg', last_frame)
                     last_i = i
             elif dot == last_dot:
@@ -265,7 +266,7 @@ class DiceVideoProcessor:
                 _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
                 non_zero_pixels = cv2.countNonZero(thresh)
                 if non_zero_pixels > 300:  # 假设100个像素的变化可以忽略
-                    if last_i is None or i - last_i > 10:
+                    if last_i is None or i - last_i > 25:
                         dice_frame, poi = self.__extract_dice(frame)
                         if dice_frame is not None:
                             x1, y1, w1, h1 = poi
@@ -342,14 +343,16 @@ class DiceVideoProcessor:
         if dot != self.last_dot:
             changed = True
             self.logger.info(f"{second}检测骰子点数变动: {self.last_dot} ==> {dot}")
+            self.last_second = second
         if not changed and self.last_frame is not None:
             diff = cv2.absdiff(frame, self.last_frame)
             gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
             gray_diff[0:80, :] = 0
             _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
             non_zero_pixels = cv2.countNonZero(thresh)
-            if non_zero_pixels > 200:
+            if non_zero_pixels > 200 and (self.last_second is None or second - self.last_second > 25):
                 changed = True
+                self.last_second = second
                 self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
         if changed:
             self.extract_feature_and_save(self.last_frame,dot)
