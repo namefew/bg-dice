@@ -61,7 +61,7 @@ class FeatureAnalyzer:
             self.neg_tree = KDTree(neg_points)
         else:
             self.neg_tree = None
-        self.all = np.concatenate([arr for arr in [self.zero, self.pos, self.neg] if arr.size > 0])
+        self.all = np.concatenate([arr for arr in [self.zero, self.pos, self.neg]])
         all_points = np.column_stack((
             self.all[:, 0] + self.all[:, 2] / 2,
             self.all[:, 1] + self.all[:, 3] / 2
@@ -118,6 +118,8 @@ class FeatureAnalyzer:
 
     def load_combined_features(self,file_path='features_combined.npz'):
         """ 从npz文件加载所有特征 """
+        if not os.path.exists(file_path):
+            return self.load_features_by_prefix()
         data = np.load(file_path)
         return (
             data['zero_features'],
@@ -391,7 +393,10 @@ class FeatureAnalyzer:
         tree_name = f"{sample_type}_tree"
         setattr(self, tree_name, KDTree(points) if points.size > 0 else None)
 
-        self.all.add(new_sample)
+        if self.all.size == 0:
+            self.all = new_sample.reshape(1, -1)  # 空数组时初始化二维结构
+        else:
+            self.all = np.vstack([self.all, new_sample])  # 非空时垂直堆叠
         all_points = np.column_stack((
             self.all[:, 0] + self.all[:, 2] / 2,
             self.all[:, 1] + self.all[:, 3] / 2
@@ -403,6 +408,7 @@ class FeatureAnalyzer:
 
 if __name__ == "__main__":
     analyzer = FeatureAnalyzer()
+    analyzer.save_combined_features(analyzer.zero, analyzer.pos, analyzer.neg)
     # analyzer.plot_all_label_heatmaps(analyzer.zero)
     # analyzer.plot_all_label_heatmaps(analyzer.pos)
     # analyzer.plot_all_label_heatmaps(analyzer.neg)

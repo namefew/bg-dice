@@ -14,7 +14,7 @@
     },
     "radius_values": [1,2],
     "is_force_add_sample": false,
-    "use_all_samples": true,
+    "use_all_samples": false,
     "use_old_classifier": false,
     "single_min_rate": 0.2,
     "min_rate": 0.6
