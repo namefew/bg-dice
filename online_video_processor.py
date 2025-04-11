@@ -140,7 +140,8 @@ class DiceOnlineVideoProcessor:
                         return
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(self.fps * second))
                 else:  # 实时流模式
-                    for _ in range(int(self.fps * step)):
+                    non_zero_pixels = 0
+                    while non_zero_pixels<200:
                         ret, frame = self.cap.read()
                         if not ret:
                             if self.is_seekable:
@@ -151,7 +152,30 @@ class DiceOnlineVideoProcessor:
                                 self.logger.info("视频流已结束，尝试重新连接...")
                                 self.start_process(self.url)
                                 return
-
+                        if self.roi is not None:
+                            x, y, w, h = self.roi
+                            frame = frame[y:y + h, x:x + w]
+                        if self.last_frame is None:
+                            self.last_frame = frame
+                            continue
+                        diff = cv2.absdiff(frame, self.last_frame)
+                        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+                        gray_diff[0:80, :] = 0
+                        _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
+                        non_zero_pixels = cv2.countNonZero(thresh)
+                    dot,conf = self.dot_cnn.predict_image(frame)
+                    self.logger.info(f"检测到图像变动，当前点输：{dot} {conf:.4f} 等待{step}秒结算和下注")
+                    for _ in range(int(self.fps*step)):
+                        ret, frame = self.cap.read()
+                        if not ret:
+                            if self.is_seekable:
+                                self.logger.info("Failed to read frame")
+                                self.stop_process()
+                                return
+                            else:
+                                self.logger.info("视频流已结束，尝试重新连接...")
+                                self.start_process(self.url)
+                                return
                 ret, frame = self.cap.retrieve()
                 if not ret:
                     self.logger.info("Failed to read frame")

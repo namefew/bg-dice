@@ -1,5 +1,5 @@
 {
-    "step_second": 15,
+    "step_second": 25,
     "hotkeys": {
         "1点": "num1",
         "2点": "num2",
@@ -12,7 +12,7 @@
         "单": "num7",
         "双": "num8"
     },
-    "radius_values": [1,2],
+    "radius_values": [1,2,3],
     "is_force_add_sample": false,
     "use_all_samples": false,
     "use_old_classifier": false,
