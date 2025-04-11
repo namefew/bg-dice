@@ -222,7 +222,7 @@ class DiceOnlineVideoProcessor:
             changed = True
             self.last_second = second
             self.logger.info(f"{second}检测骰子点数变动: {self.last_dot} ==> {dot}")
-        if force_changed:
+        elif force_changed:
             changed = True
             self.logger.info(f"{second}检测骰子位置变动: {self.last_dot} ==> {dot}")
         elif not changed and self.last_frame is not None:
