@@ -3,13 +3,103 @@ import numpy as np
 import os
 from collections import defaultdict
 from scipy.spatial import KDTree
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+import atexit
 
 import config
 from video_processor import DiceVideoProcessor
-dice_classifier = None
+import threading
+class FeatureDatabase:
+    _local = threading.local()  # 线程本地存储
+    def __init__(self, db_path='data/dice_features.db'):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(self.db_path))
+        self._init_db()
+        atexit.register(FeatureDatabase.close_all)
 
+    def _get_conn(self):
+        """为每个线程创建独立的连接"""
+        if not hasattr(FeatureDatabase._local, 'conn'):
+            FeatureDatabase._local.conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,  # 禁用线程检查
+                timeout=30  # 增加超时时间
+            )
+            # 启用WAL模式提升并发性能
+            FeatureDatabase._local.conn.execute('PRAGMA journal_mode=WAL;')
+        return FeatureDatabase._local.conn
 
+    def _init_db(self):
+        conn = self._get_conn()
+        try:
+            conn.executescript('''
+               CREATE TABLE IF NOT EXISTS dice_features (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    x REAL NOT NULL,
+                    y REAL NOT NULL,
+                    width REAL NOT NULL,
+                    height REAL NOT NULL,
+                    current_dot INTEGER NOT NULL,
+                    other_features BLOB,
+                    next_dot INTEGER NOT NULL,
+                    angle_diff REAL NOT NULL,
+                    sample_type TEXT CHECK(sample_type IN ('zero','pos','neg')),
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                ) ;
+               CREATE INDEX IF NOT EXISTS idx_timestamp ON dice_features(timestamp);
+               ''')
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            print(f"初始化数据库失败: {str(e)}")
 
+    def insert_feature(self, feature_data):
+        insert_sql = '''
+           INSERT INTO dice_features 
+           (x, y, width, height, current_dot, other_features, next_dot, angle_diff, sample_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           '''
+        conn = self._get_conn()
+        try:
+            with conn:  # 使用事务上下文管理
+                conn.execute(insert_sql, feature_data)
+        except sqlite3.IntegrityError as e:
+            print(f"数据完整性错误: {str(e)}")
+        except sqlite3.OperationalError as e:
+            print(f"数据库操作失败: {str(e)}")
+
+    @classmethod
+    def close_all(cls):
+        """关闭所有线程的连接"""
+        if hasattr(cls._local, 'conn'):
+            cls._local.conn.close()
+            del cls._local.conn
+
+    def close(self):
+        self.conn.close()
+
+    def get_features_by_time(self, start_time: datetime, end_time: datetime):
+        query_sql = '''
+           SELECT * FROM dice_features 
+           WHERE timestamp BETWEEN ? AND ?
+           ORDER BY timestamp DESC
+           '''
+        return self.conn.execute(query_sql, (start_time.isoformat(), end_time.isoformat())).fetchall()
+
+    def get_weekly_patterns(self):
+        query_sql = '''
+           SELECT 
+               strftime('%Y-%W', timestamp) as week,
+               sample_type,
+               current_dot,
+               next_dot,
+               COUNT(*) as count
+           FROM dice_features
+           GROUP BY week, sample_type, current_dot, next_dot
+           '''
+        return self.conn.execute(query_sql).fetchall()
 dice_classifier = None
 
 def get_cnn_instance():
@@ -67,6 +157,7 @@ class FeatureAnalyzer:
             self.all[:, 1] + self.all[:, 3] / 2
         )) if self.neg.size > 0 else np.array([])
         self.all_tree = KDTree(all_points)
+        self.db = FeatureDatabase()
     def is_force_add_sample(self):
         return self.config.get('force_add_sample', False)
     def load_features_by_prefix(self,folder_path='features'):
@@ -220,6 +311,15 @@ class FeatureAnalyzer:
         if config.get_instance().get('use_all_samples', True):
             the_tree = self.all_tree
             samples = self.all
+        elif config.get_instance().get('use_sample_index',0)==0:
+            the_tree = self.zero_tree
+            samples = self.zero
+        elif config.get_instance().get('use_sample_index',0)==1:
+            the_tree = self.pos_tree
+            samples = self.pos
+        elif config.get_instance().get('use_sample_index',0)==-1:
+            the_tree = self.neg_tree
+            samples = self.neg
         if the_tree is None:
             return []
         indices = the_tree.query_ball_point([target_x, target_y], radius)
@@ -376,7 +476,19 @@ class FeatureAnalyzer:
             features[5],  # 其他特征
             current_dot  # next_dot
         ])
-
+        # 新增数据库存储
+        db_data = (
+            features[0],  # x
+            features[1],  # y
+            features[2],  # width
+            features[3],  # height
+            int(features[6]),  # current_dot
+            features[5].tobytes(),  # 序列化其他特征
+            current_dot,  # next_dot
+            angle_diff,
+            sample_type
+        )
+        self.db.insert_feature(db_data)
         # 更新特征数组
         target_array = getattr(self, sample_type)
         if target_array.size == 0:

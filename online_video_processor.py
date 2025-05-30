@@ -89,8 +89,27 @@ class DiceOnlineVideoProcessor:
         return median
 
     def start_process(self, url):
+        # 在创建新 VideoCapture 前显式释放旧资源
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None  # 重要！避免僵尸对象
+        # 先停止现有线程
+        if self.process_thread and self.process_thread.is_alive():
+            self.running = False
+            try:
+                self.process_thread.join(timeout=2)  # 添加超时
+            except RuntimeError:
+                pass  # 忽略自连接错误
+
+        # 重置关键状态2
         self.url = url
         self.is_seekable = self._check_seekable(url)
+        # 缺少状态重置逻辑
+        self.running = True  # 此处重置运行状态
+        self.last_frame = None  # 此处需要重置关键状态变量
+        self.last_dot = None
+        self.last_second = None  # 未重置导致时间间隔判断失效
+        self.background_frames.clear()
         self.logger.info(f"视频源可跳帧：{self.is_seekable}")
 
         self.cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
@@ -150,8 +169,8 @@ class DiceOnlineVideoProcessor:
                                 return
                             else:
                                 self.logger.info("视频流已结束，尝试重新连接...")
-                                self.start_process(self.url)
-                                return
+                                self.running = False  # 先停止循环
+                                break  # 退出当前循环
                         if self.roi is not None:
                             x, y, w, h = self.roi
                             frame = frame[y:y + h, x:x + w]
@@ -174,8 +193,8 @@ class DiceOnlineVideoProcessor:
                                 return
                             else:
                                 self.logger.info("视频流已结束，尝试重新连接...")
-                                self.start_process(self.url)
-                                return
+                                self.running = False  # 先停止循环
+                                threading.Timer(5, self.safe_restart).start()
                 ret, frame = self.cap.retrieve()
                 if not ret:
                     self.logger.info("Failed to read frame")
@@ -185,8 +204,8 @@ class DiceOnlineVideoProcessor:
                         return
                     else:
                         self.logger.info("视频流已结束，尝试重新连接...")
-                        self.start_process(self.url)
-                        return
+                        self.running = False  # 先停止循环
+                        threading.Timer(5, self.safe_restart).start()
                 # end = time.time()
                 #self.logger.info(f"{second}解码耗时：{(end-start)*100:.4f}ms")
                 if self.roi is not None:
@@ -197,9 +216,17 @@ class DiceOnlineVideoProcessor:
         except Exception as e:
             self.logger.error(f"处理视频时发生异常: {str(e)}")
             traceback.print_exc()
+            self.running = False  # 确保标记为停止
+            if not self.is_seekable:
+                self.logger.info("准备延迟重连...")
+                threading.Timer(5, self.safe_restart).start()  # 延迟重启
         finally:
             self.logger.info("处理线程结束。")
 
+    def safe_restart(self):
+        """安全的重启方法"""
+        if not self.running:
+            self.start_process(self.url)
     def next_frame(self, frame, second,force_changed=False):
         """处理每一秒采样的帧图像"""
         dot, cf = self.dot_cnn.predict_image(frame)
