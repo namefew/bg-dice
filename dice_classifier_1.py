@@ -1,35 +1,49 @@
-from matplotlib import pyplot as plt
-import numpy as np
 import os
 from collections import defaultdict
+
+import numpy as np
+from matplotlib import pyplot as plt
 from scipy.spatial import KDTree
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 import atexit
+import threading
 
 import config
 from video_processor import DiceVideoProcessor
-import threading
+
+
 class FeatureDatabase:
     _local = threading.local()  # 线程本地存储
+    _instances = []  # 跟踪所有实例
+    _lock = threading.Lock()  # 用于保护实例列表的锁
+
     def __init__(self, db_path='data/dice_features.db'):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
-        self._init_db()
-        atexit.register(FeatureDatabase.close_all)
+        # 不在初始化时创建连接，而是在需要时创建
+        self.conn = None
+
+        # 注册实例以便在退出时清理
+        with FeatureDatabase._lock:
+            FeatureDatabase._instances.append(self)
+
+        atexit.register(self._cleanup)
 
     def _get_conn(self):
         """为每个线程创建独立的连接"""
         if not hasattr(FeatureDatabase._local, 'conn'):
             FeatureDatabase._local.conn = sqlite3.connect(
-                self.db_path,
+                str(self.db_path),
                 check_same_thread=False,  # 禁用线程检查
-                timeout=30  # 增加超时时间
+                timeout=30,  # 增加超时时间
+                isolation_level=None  # 启用自动提交模式
             )
             # 启用WAL模式提升并发性能
             FeatureDatabase._local.conn.execute('PRAGMA journal_mode=WAL;')
+            # 设置锁定模式
+            FeatureDatabase._local.conn.execute('PRAGMA locking_mode=NORMAL;')
         return FeatureDatabase._local.conn
 
     def _init_db(self):
@@ -48,7 +62,7 @@ class FeatureDatabase:
                     angle_diff REAL NOT NULL,
                     sample_type TEXT CHECK(sample_type IN ('zero','pos','neg')),
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                ) ;
+                );
                CREATE INDEX IF NOT EXISTS idx_timestamp ON dice_features(timestamp);
                ''')
             conn.commit()
@@ -63,22 +77,32 @@ class FeatureDatabase:
            '''
         conn = self._get_conn()
         try:
-            with conn:  # 使用事务上下文管理
-                conn.execute(insert_sql, feature_data)
+            conn.execute('BEGIN IMMEDIATE')  # 显式开始事务
+            conn.execute(insert_sql, feature_data)
+            conn.execute('COMMIT')  # 提交事务
         except sqlite3.IntegrityError as e:
+            conn.execute('ROLLBACK')  # 回滚事务
             print(f"数据完整性错误: {str(e)}")
         except sqlite3.OperationalError as e:
+            conn.execute('ROLLBACK')  # 回滚事务
             print(f"数据库操作失败: {str(e)}")
 
-    @classmethod
-    def close_all(cls):
+    def close_all(self):
         """关闭所有线程的连接"""
-        if hasattr(cls._local, 'conn'):
-            cls._local.conn.close()
-            del cls._local.conn
+        if hasattr(FeatureDatabase._local, 'conn'):
+            try:
+                FeatureDatabase._local.conn.close()
+            except:
+                pass
+            delattr(FeatureDatabase._local, 'conn')
 
     def close(self):
-        self.conn.close()
+        """关闭当前实例的连接"""
+        self.close_all()
+
+    def _cleanup(self):
+        """清理资源"""
+        self.close_all()
 
     def get_features_by_time(self, start_time: datetime, end_time: datetime):
         query_sql = '''
@@ -86,7 +110,9 @@ class FeatureDatabase:
            WHERE timestamp BETWEEN ? AND ?
            ORDER BY timestamp DESC
            '''
-        return self.conn.execute(query_sql, (start_time.isoformat(), end_time.isoformat())).fetchall()
+        conn = self._get_conn()
+        cursor = conn.execute(query_sql, (start_time.isoformat(), end_time.isoformat()))
+        return cursor.fetchall()
 
     def get_weekly_patterns(self):
         query_sql = '''
@@ -99,7 +125,22 @@ class FeatureDatabase:
            FROM dice_features
            GROUP BY week, sample_type, current_dot, next_dot
            '''
-        return self.conn.execute(query_sql).fetchall()
+        conn = self._get_conn()
+        cursor = conn.execute(query_sql)
+        return cursor.fetchall()
+
+    @classmethod
+    def close_all_instances(cls):
+        """关闭所有实例的连接"""
+        with cls._lock:
+            for instance in cls._instances:
+                instance.close()
+            cls._instances.clear()
+
+
+# 确保在程序退出时关闭所有数据库连接
+atexit.register(FeatureDatabase.close_all_instances)
+
 dice_classifier = None
 
 def get_cnn_instance():
@@ -165,24 +206,24 @@ class FeatureAnalyzer:
         zero_list = []
         negative_list = []
         positive_list = []
+        if os.path.exists(folder_path):
+            for filename in os.listdir(folder_path):
+                if filename.endswith('.npy'):
+                    file_path = os.path.join(folder_path, filename)
 
-        for filename in os.listdir(folder_path):
-            if filename.endswith('.npy'):
-                file_path = os.path.join(folder_path, filename)
+                    # 提取前缀数字（基于你的原始实现）
+                    try:
+                        num = int(filename.split('_')[0])
+                        feature = np.load(file_path)
 
-                # 提取前缀数字（基于你的原始实现）
-                try:
-                    num = int(filename.split('_')[0])
-                    feature = np.load(file_path)
-
-                    if num == 0:
-                        zero_list.append(feature)
-                    elif num < 0:
-                        negative_list.append(feature)
-                    else:
-                        positive_list.append(feature)
-                except (ValueError, IndexError):
-                    continue  # 忽略不符合命名规范的文件
+                        if num == 0:
+                            zero_list.append(feature)
+                        elif num < 0:
+                            negative_list.append(feature)
+                        else:
+                            positive_list.append(feature)
+                    except (ValueError, IndexError):
+                        continue  # 忽略不符合命名规范的文件
 
         # 将列表转换为numpy数组（按行堆叠）
         return (

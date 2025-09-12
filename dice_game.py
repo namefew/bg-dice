@@ -106,13 +106,17 @@ class DiceGame:
                 self.logger.info(f"当前盈利: {self.total_win*100/self.total_bets:.2f}% 最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f} 下注量：{self.total_bets} 总盈利：{self.total_win}")
         return f"当前盈利: {self.total_win*100/max(1,self.total_bets):.2f}% 最高盈利:{self.max_win:.2f} 最低盈利:{self.min_win:.2f} 下注量：{self.total_bets} 总盈利：{self.total_win:.2f}"
     def check_bets(self, second, type, current_dot, predict_next_dots,predict_confidences,min_exp = 1.00):
+        confidence_str = np.array2string(predict_confidences, separator=', ',
+                                         formatter={'float_kind': lambda x: f"{x:.4f}"})
+        self.logger.info(f"{second}当前：{current_dot} 预测: {predict_next_dots} 预测置信度: {confidence_str}")
+
         if self.last_second is None or second - self.last_second > 20:
-            confidence_str = np.array2string(predict_confidences, separator=', ',
-                                             formatter={'float_kind': lambda x: f"{x:.4f}"})
-            self.logger.info(f"{second}当前：{current_dot} 预测: {predict_next_dots} 预测置信度: {confidence_str}")
             self.current_bets = self.new_bets(type, predict_next_dots, predict_confidences,min_exp=min_exp)
             self.total_bets += sum(bet.bet_value for bet in self.current_bets)
             self.logger.info(f"{second} 下注: {[str(bet) for bet in self.current_bets]}")
 
             self.last_second = second
             return self.current_bets
+        else:
+            self.logger.info(f"{second} 忽略下注，last_second={self.last_second}")
+            self.last_second = second

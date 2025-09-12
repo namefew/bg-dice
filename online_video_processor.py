@@ -1,4 +1,5 @@
 import os
+import time
 import traceback
 import random
 from datetime import datetime
@@ -36,7 +37,8 @@ class DiceOnlineVideoProcessor:
 
     def add_next_frame_callback(self, callback):
         """添加 next_frame 回调函数"""
-        self.next_frame_callbacks.append(callback)
+        if callback not in self.next_frame_callbacks:
+            self.next_frame_callbacks.append(callback)
 
     def _check_seekable(self, url):
         """综合判断是否支持跳帧"""
@@ -88,10 +90,12 @@ class DiceOnlineVideoProcessor:
 
         return median
 
-    def start_process(self, url):
+    def start_process(self, url,retry_count=0):
+        max_retries = 103  # 最大重试次数
         # 在创建新 VideoCapture 前显式释放旧资源
         if self.cap is not None:
             self.cap.release()
+            time.sleep(1)
             self.cap = None  # 重要！避免僵尸对象
         # 先停止现有线程
         if self.process_thread and self.process_thread.is_alive():
@@ -113,7 +117,10 @@ class DiceOnlineVideoProcessor:
         self.logger.info(f"视频源可跳帧：{self.is_seekable}")
 
         self.cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "video_codec;h264_cuvid"
+        # 添加以下选项 ↓↓↓
+        self.cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)  # 设置超时
+        self.cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000)  # 设置超时
+        # os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "video_codec;h264_cuvid"
 
         # 检查视频是否成功打开
         if not self.cap.isOpened():
@@ -128,8 +135,11 @@ class DiceOnlineVideoProcessor:
         if self.is_seekable:
             self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         # 检查 FPS 是否有效
+        # 修改FPS判断逻辑
         if self.fps is None or self.fps <= 0:
-            print("Invalid FPS value")
+            self.logger.error(f"无效FPS值，准备重试({retry_count}/{max_retries})")
+            if retry_count < max_retries:
+                threading.Timer(5, self.start_process, args=(url, retry_count + 1)).start()
             return
         self.running = True
         self.last_frame = None
@@ -168,9 +178,11 @@ class DiceOnlineVideoProcessor:
                                 self.stop_process()
                                 return
                             else:
-                                self.logger.info("视频流已结束，尝试重新连接...")
-                                self.running = False  # 先停止循环
-                                break  # 退出当前循环
+                                self.logger.error("视频流读取失败，尝试重置解码器")
+                                self.cap.release()  # 显式释放
+                                time.sleep(1)
+                                self.cap = cv2.VideoCapture(self.url)  # 重新创建
+                                continue
                         if self.roi is not None:
                             x, y, w, h = self.roi
                             frame = frame[y:y + h, x:x + w]
@@ -183,7 +195,7 @@ class DiceOnlineVideoProcessor:
                         _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
                         non_zero_pixels = cv2.countNonZero(thresh)
                     dot,conf = self.dot_cnn.predict_image(frame)
-                    self.logger.info(f"检测到图像变动，当前点输：{dot} {conf:.4f} 等待{step}秒结算和下注")
+                    self.logger.info(f"检测到图像变动，当前点数：{dot} {conf:.4f} 等待{step}秒结算和下注")
                     for _ in range(int(self.fps*step)):
                         ret, frame = self.cap.read()
                         if not ret:
@@ -192,9 +204,11 @@ class DiceOnlineVideoProcessor:
                                 self.stop_process()
                                 return
                             else:
-                                self.logger.info("视频流已结束，尝试重新连接...")
-                                self.running = False  # 先停止循环
-                                threading.Timer(5, self.safe_restart).start()
+                                self.logger.error("视频流读取失败，尝试重置解码器")
+                                self.cap.release()  # 显式释放
+                                time.sleep(1)
+                                self.cap = cv2.VideoCapture(self.url)  # 重新创建
+                                continue
                 ret, frame = self.cap.retrieve()
                 if not ret:
                     self.logger.info("Failed to read frame")
@@ -203,9 +217,11 @@ class DiceOnlineVideoProcessor:
                         self.stop_process()
                         return
                     else:
-                        self.logger.info("视频流已结束，尝试重新连接...")
-                        self.running = False  # 先停止循环
-                        threading.Timer(5, self.safe_restart).start()
+                        self.logger.error("视频流读取失败，尝试重置解码器")
+                        self.cap.release()  # 显式释放
+                        time.sleep(1)
+                        self.cap = cv2.VideoCapture(self.url)  # 重新创建
+                        continue
                 # end = time.time()
                 #self.logger.info(f"{second}解码耗时：{(end-start)*100:.4f}ms")
                 if self.roi is not None:
@@ -229,6 +245,9 @@ class DiceOnlineVideoProcessor:
             self.start_process(self.url)
     def next_frame(self, frame, second,force_changed=False):
         """处理每一秒采样的帧图像"""
+        if frame is None:
+            self.logger.warning("收到空帧，跳过处理")
+            return second
         dot, cf = self.dot_cnn.predict_image(frame)
         if dot == 0:
             self.logger.info(f"{second} 检测骰子在动: {dot}")
@@ -277,6 +296,9 @@ class DiceOnlineVideoProcessor:
         return dot
 
     def calculate_background(self, frame, second, dot, changed,last_frame):
+        if frame is None:  # 新增空帧检查
+            self.logger.warning("收到空帧，跳过背景计算")
+            return
         if self.background is not None:
             if self.is_seekable:
                 return

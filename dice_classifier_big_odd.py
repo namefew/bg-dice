@@ -1,5 +1,4 @@
 from collections import defaultdict
-from turtledemo.penrose import start
 
 import numpy as np
 
@@ -14,6 +13,8 @@ class BigOddClassifier(FeatureAnalyzer):
 
 
     def predict_image_top(self, frame: np.ndarray, background, n=6, angle_diff=0):
+        if background is None:
+            return [], []
         video_processor = DiceVideoProcessor(background)
         features = video_processor.extract_simple_feature(frame)
         if features is None:

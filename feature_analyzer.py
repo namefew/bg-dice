@@ -36,21 +36,22 @@ class FeatureAnalyzer:
     def _load_all_samples(self):
         """加载所有.npy文件并提取关键特征"""
         samples = []
-        for f in os.listdir(self.folder_path):
-            if f.endswith('.npy'):
-                array = np.load(os.path.join(self.folder_path, f))
-                # 解析特征（与DiceDataset保持一致）
-                x = array[2]/2 + array[0]
-                y =min(array[2]/2,array[3]/2) + array[1]
-                shape_feat = (array[2], array[3])
-                next_dot = int(f.split('_')[0])  # 目标点数
-                samples.append({
-                    'coordinates': (x, y),
-                    'shape': shape_feat,
-                    'current_dot':array[6],
-                    'next_dot': next_dot
-                    # 'raw_features': array
-                })
+        if os.path.exists(self.folder_path):
+            for f in os.listdir(self.folder_path):
+                if f.endswith('.npy'):
+                    array = np.load(os.path.join(self.folder_path, f))
+                    # 解析特征（与DiceDataset保持一致）
+                    x = array[2]/2 + array[0]
+                    y =min(array[2]/2,array[3]/2) + array[1]
+                    shape_feat = (array[2], array[3])
+                    next_dot = int(f.split('_')[0])  # 目标点数
+                    samples.append({
+                        'coordinates': (x, y),
+                        'shape': shape_feat,
+                        'current_dot':array[6],
+                        'next_dot': next_dot
+                        # 'raw_features': array
+                    })
         return samples
     def save_samples(self, file_path='new-samples.pkl'):
         """保存处理后的样本数据到文件"""

@@ -29,7 +29,10 @@ class DiceApp:
         self.save_frame_count = 0
         self.last_second = None
         self.processor = DiceOnlineVideoProcessor(roi=self.roi, logger=self.logger)
-        self.processor.add_next_frame_callback(self.process_frame)
+        self.processor.next_frame_callbacks.clear()  # 先清空
+        self.processor.add_next_frame_callback(self.processor.calculate_background)
+        self.processor.add_next_frame_callback(self.process_frame)  # 唯一注册点
+
         self.running = False
         self.url_var = tk.StringVar()
         self.type_var = tk.StringVar()  # 添加类型变量
@@ -77,11 +80,14 @@ class DiceApp:
             self.dice_game.reset()
         url = self.url_var.get()
         if self.running:
-            self.processor.start_process(url)
+              self.processor.start_process(url)
         else:
             self.processor.stop_process()
 
     def process_frame(self, frame, second, current_dot, changed,last_frame):
+        if frame is None:
+            self.logger.warning("收到空帧，跳过处理")
+            return
         if changed and last_frame is not None and not self.processor.is_seekable or self.cnn.is_force_add_sample():
             self.cnn.add_sample(current_dot=current_dot,last_frame=last_frame ,background=self.processor.background,angle_diff=self.processor.background_angle_diff)
         if changed:
@@ -94,7 +100,7 @@ class DiceApp:
                 else:
                     predict_dots, confidences = self.cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
             else:
-                self.bigodd_cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
+                predict_dots, confidences = self.bigodd_cnn.predict_image_top(frame, background=self.processor.background,angle_diff=self.processor.background_angle_diff)
             predict_next_dots = [int(pd) for pd in predict_dots]
             predict_confidences = np.around(confidences, decimals=4)
             # 将数组转换为字符串
