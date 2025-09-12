@@ -341,7 +341,7 @@ class DiceOnlineVideoProcessor:
             avg_angle = sum_angles / len(self.background_frames)
             self.background_angle_diff = round(avg_angle - 90)
             current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            background_path = f"output/background_{self.background_angle_diff}_{current_time}.jpg"
+            background_path = f"images/background_{self.background_angle_diff}_{current_time}.jpg"
             cv2.imwrite(background_path, background)
             self.logger.info(f"background saved to {background_path}")
             self.background_frames.clear()

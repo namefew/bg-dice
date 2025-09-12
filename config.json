@@ -12,10 +12,14 @@
         "单": "num7",
         "双": "num8"
     },
-    "radius_values": [1,2,3],
-    "is_force_add_sample": false,
-    "use_all_samples": false,
     "use_old_classifier": false,
-    "single_min_rate": 0.2,
-    "min_rate": 0.6
+    "min_rate": 0.66,
+    "use_sample_index": 6,
+
+    "is_force_add_sample": false,
+    "single_min_rate": 0.23,
+    "use_all_samples": true,
+    "radius_values": [2,3,4],
+    "database":"dice_features.db",
+    "websocket_port":8765
 }

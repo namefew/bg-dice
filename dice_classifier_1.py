@@ -19,7 +19,7 @@ class FeatureDatabase:
     _instances = []  # 跟踪所有实例
     _lock = threading.Lock()  # 用于保护实例列表的锁
 
-    def __init__(self, db_path='data/dice_features.db'):
+    def __init__(self, db_path=config.get_instance().get('database','dice_features.db')):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # 不在初始化时创建连接，而是在需要时创建

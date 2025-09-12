@@ -38,7 +38,7 @@ class LogManager:
                 ch.setLevel(logging.INFO)
 
                 # 创建一个自定义格式化器
-                formatter = ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                formatter = ColoredFormatter('%(asctime)s - %(message)s')
 
                 # 将格式化器添加到处理器
                 ch.setFormatter(formatter)
