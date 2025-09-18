@@ -3,6 +3,7 @@ from collections import defaultdict
 import numpy as np
 
 import config
+import train_resnet
 from dice_classifier_1 import FeatureAnalyzer
 from video_processor import DiceVideoProcessor
 
@@ -12,7 +13,7 @@ class BigOddClassifier(FeatureAnalyzer):
         super().__init__(folder_path)
 
 
-    def predict_image_top(self, frame: np.ndarray, background, n=6, angle_diff=0):
+    def predict_image_top_0(self, frame: np.ndarray, background, n=6, angle_diff=0):
         if background is None:
             return [], []
         video_processor = DiceVideoProcessor(background)
@@ -42,6 +43,20 @@ class BigOddClassifier(FeatureAnalyzer):
         sorted_probs = [item[1] for item in sorted_items]
         return sorted_numbers, sorted_probs
 
+    def predict_image_top(self, frame: np.ndarray, background, n=6, angle_diff=0):
+        dot, conf = train_resnet.get_cnn_instance().predict_image(frame)
+        if dot == 0:
+            return [], []
+        elif dot == 1 or dot == 3:  # 大双
+            return [4, 6, 2, 5, 1, 3], [0.3, 0.3, 0.2, 0.2, 0, 0]
+        elif dot == 2:  # 大单
+            return [5, 1, 3, 4, 6, 2], [0.5, 0.125, 0.125, 0.125, 0.125, 0]
+        elif dot == 4 or dot == 6:  # 小单
+            return [1, 3, 5, 2, 4, 6], [0.3, 0.3, 0.2, 0.2, 0, 0]
+        elif dot == 5:  # 小双
+            return [2, 4, 6, 1, 3, 5], [0.5, 0.125, 0.125, 0.125, 0.125, 0]
+        else:
+            return [], []
     def _predict(self, target_x, target_y, current_dot, angle_diff=0, min_rate=0.6):
         state = {}
         rule_counts = defaultdict(int)

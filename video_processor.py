@@ -95,7 +95,7 @@ class DiceVideoProcessor:
             x1, y1, w1, h1 = region
             features = self._extract_features(dice_roi, x1 , y1 , w1 , h1 , dot)
             features = features.numpy() if isinstance(features, torch.Tensor) else features
-            combined_features = np.concatenate((features.flatten(), [self.background_angle_diff]))
+            combined_features = np.concatenate((features.flatten(), [angle_diff]))
             return combined_features
         return None
 

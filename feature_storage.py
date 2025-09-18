@@ -1,150 +1,110 @@
 import pickle
 import numpy as np
-import pandas as pd
-from datetime import datetime
+import csv
 import os
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
 
 
 class TimeSeriesFeatureStorage:
-    def __init__(self, storage_path="timeseries_features"):
-        self.storage_path = storage_path
-        os.makedirs(storage_path, exist_ok=True)
-        self.feature_file = os.path.join(storage_path, "timeseries_features.pkl")
-        self.metadata_file = os.path.join(storage_path, "metadata.csv")
+    def __init__(self, storage_dir="features"):
+        self.storage_dir = storage_dir
+        os.makedirs(storage_dir, exist_ok=True)
+        self.feature_cache = []
+        self.cache_limit = 100  # 缓存100个特征后再批量写入
 
-    def save_features(self, features: np.ndarray,  game: 'DiceGame'):
-        """
-        保存时间序列特征和标签
-        :param features: 特征向量
-        :param label: 标签（游戏结果）
-        :param game: DiceGame对象
-        """
 
-        label = game.result - 1 if game.result is not None else -1  # 结果1 - 6点， 标签就是0-5点
-        # 创建元数据记录
-        metadata_record = {
-            'timestamp': game.start_time.isoformat(),
-            'table_id': game.table_id,
-            'seq_no': game.seq_no,
-            'round_id': game.round_id,
-            'result': game.result,  # 实际结果
-            'label': label,  # 用于训练的标签
-            'recommend': game.recommend,
-            'recommend_confidence': game.recommend_confidence,
-            'last_game_result': game.last_game_result,
-            'feature_vector_length': len(features) if features is not None else 0,
-            # 添加 weekday 和 hour 作为元数据
-            'weekday': game.start_time.weekday(),
-            'hour': game.start_time.hour
+    def save_features(self, features, game=None):
+        """
+        保存特征数据
+        :param features: 特征数据
+        :param game: 游戏对象（可选）
+        """
+        # 创建特征记录
+        feature_record = {
+            'timestamp': datetime.now().isoformat(),
+            'features': features.tolist() if isinstance(features, np.ndarray) else features,
         }
 
-        # 保存特征向量和标签
-        if features is not None and game.result is not None:
-            self._save_feature_vector(game.seq_no, features, label)
+        # 如果有游戏对象，添加游戏相关信息
+        if game is not None:
+            # 计算标签
+            label = game.result - 1 if game.result is not None else -1
+            feature_record.update({
+                'round_id': game.round_id,
+                'seq_no': game.seq_no,
+                'table_id': game.table_id,
+                'game_status': game.status.name if hasattr(game.status, 'name') else str(game.status),
+                'result': game.result,
+                'label': label,
+                'recommend': game.recommend,
+                'recommend_confidence': game.recommend_confidence,
+                'last_game_result': game.last_game_result,
+                'feature_vector_length': len(features) if features is not None else 0,
+                'weekday': game.start_time.weekday(),
+                'hour': game.start_time.hour
+            })
 
-        # 保存元数据
-        self._save_metadata(metadata_record)
+        # 添加到缓存
+        self.feature_cache.append(feature_record)
 
-    def _save_feature_vector(self, seq_no: int, features: np.ndarray, label: int):
-        """保存单个特征向量和标签"""
-        # 加载现有特征字典
-        feature_dict = self._load_feature_dict()
-        feature_dict[seq_no] = {
-            'features': features,
-            'label': label,
-            'timestamp': datetime.now().isoformat()
+        # 如果缓存达到限制，写入文件
+        if len(self.feature_cache) >= self.cache_limit:
+            self.flush_cache()
+
+
+
+
+
+
+    def flush_cache(self):
+        """
+        将缓存中的特征数据写入文件
+        """
+        if not self.feature_cache:
+            return
+
+        # 生成文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.storage_dir, f"features_{timestamp}.json")
+
+        try:
+            # 写入文件
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(self.feature_cache, f, ensure_ascii=False, indent=2)
+            
+            print(f"保存了 {len(self.feature_cache)} 条特征数据到 {filename}")
+            # 清空缓存
+            self.feature_cache.clear()
+        except Exception as e:
+            print(f"保存特征数据时出错: {e}")
+
+    def save_features_batch(self, input_features, output_features, labels=None):
+        """
+        批量保存特征数据
+        :param input_features: 输入特征
+        :param output_features: 输出特征
+        :param labels: 标签数据
+        """
+        feature_record = {
+            'timestamp': datetime.now().isoformat(),
+            'input_features': input_features.tolist() if isinstance(input_features, np.ndarray) else input_features,
+            'output_features': output_features.tolist() if isinstance(output_features, np.ndarray) else output_features,
         }
 
-        # 保存特征字典
-        with open(self.feature_file, 'wb') as f:
-            pickle.dump(feature_dict, f)
+        # 添加标签信息
+        if labels is not None:
+            feature_record['labels'] = labels
 
-    def _save_metadata(self, metadata_record: dict):
-        """保存元数据到CSV"""
-        df_new = pd.DataFrame([metadata_record])
+        # 添加到缓存
+        self.feature_cache.append(feature_record)
 
-        if os.path.exists(self.metadata_file):
-            df_existing = pd.read_csv(self.metadata_file)
-            # 修复 FutureWarning: 明确处理空 DataFrame 的情况
-            if not df_existing.empty:
-                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            else:
-                df_combined = df_new
-        else:
-            df_combined = df_new
+        # 如果缓存达到限制，写入文件
+        if len(self.feature_cache) >= self.cache_limit:
+            self.flush_cache()
 
-        df_combined.to_csv(self.metadata_file, index=False)
-
-    def _load_feature_dict(self) -> dict:
-        """加载特征字典"""
-        if os.path.exists(self.feature_file):
-            with open(self.feature_file, 'rb') as f:
-                return pickle.load(f)
-        return {}
-
-    def load_timeseries_data(self) -> tuple:
+    def __del__(self):
         """
-        加载时间序列数据用于分析
-        返回: (特征矩阵, 标签数组, 元数据DataFrame)
+        在对象销毁时确保缓存被写入
         """
-        # 加载特征数据
-        feature_dict = self._load_feature_dict()
-        metadata_df = pd.read_csv(self.metadata_file) if os.path.exists(self.metadata_file) else pd.DataFrame()
-
-        if not feature_dict or metadata_df.empty:
-            return None, None, metadata_df
-
-        # 按序列号排序
-        seq_numbers = sorted(feature_dict.keys())
-        features_list = [feature_dict[seq]['features'] for seq in seq_numbers]
-        labels_list = [feature_dict[seq]['label'] for seq in seq_numbers]
-
-        # 转换为特征矩阵和标签数组
-        feature_matrix = np.array(features_list)
-        labels_array = np.array(labels_list)
-
-        # 确保元数据按相同顺序排列
-        if not metadata_df.empty and 'seq_no' in metadata_df.columns:
-            metadata_df = metadata_df.set_index('seq_no').loc[seq_numbers].reset_index()
-
-        return feature_matrix, labels_array, metadata_df
-
-    def get_features_by_time_range(self, start_time: datetime, end_time: datetime):
-        """
-        根据时间范围获取特征数据
-        返回: (特征矩阵, 标签数组, 元数据DataFrame)
-        """
-        metadata_df = pd.read_csv(self.metadata_file) if os.path.exists(self.metadata_file) else pd.DataFrame()
-        if metadata_df.empty:
-            return None, None, pd.DataFrame()
-
-        # 转换时间戳列
-        metadata_df['timestamp'] = pd.to_datetime(metadata_df['timestamp'])
-
-        # 筛选时间范围
-        mask = (metadata_df['timestamp'] >= start_time) & (metadata_df['timestamp'] <= end_time)
-        filtered_metadata = metadata_df[mask]
-
-        if filtered_metadata.empty:
-            return None, None, filtered_metadata
-
-        # 加载对应的特征向量和标签
-        feature_dict = self._load_feature_dict()
-        features_list = []
-        labels_list = []
-        valid_seq_nos = []
-
-        for seq_no in filtered_metadata['seq_no']:
-            if seq_no in feature_dict:
-                features_list.append(feature_dict[seq_no]['features'])
-                labels_list.append(feature_dict[seq_no]['label'])
-                valid_seq_nos.append(seq_no)
-
-        feature_matrix = np.array(features_list) if features_list else None
-        labels_array = np.array(labels_list) if labels_list else None
-
-        # 确保元数据与特征数据对应
-        if valid_seq_nos and not filtered_metadata.empty:
-            filtered_metadata = filtered_metadata.set_index('seq_no').loc[valid_seq_nos].reset_index()
-
-        return feature_matrix, labels_array, filtered_metadata
+        self.flush_cache()
