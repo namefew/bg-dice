@@ -47,14 +47,14 @@ class BigOddClassifier(FeatureAnalyzer):
         dot, conf = train_resnet.get_cnn_instance().predict_image(frame)
         if dot == 0:
             return [], []
-        elif dot == 1 or dot == 3:  # 大双
-            return [4, 6, 2, 5, 1, 3], [0.3, 0.3, 0.2, 0.2, 0, 0]
+        # elif dot == 1 or dot == 3:  # 大双
+        #     return [4, 6, 2, 5, 1, 3], [0.3, 0.3, 0.2, 0.2, 0, 0]
+        # elif dot == 5:  # 小双
+        #     return [2, 4, 6, 1, 3, 5], [0.5, 0.125, 0.125, 0.125, 0.125, 0]
         elif dot == 2:  # 大单
             return [5, 1, 3, 4, 6, 2], [0.5, 0.125, 0.125, 0.125, 0.125, 0]
         elif dot == 4 or dot == 6:  # 小单
             return [1, 3, 5, 2, 4, 6], [0.3, 0.3, 0.2, 0.2, 0, 0]
-        elif dot == 5:  # 小双
-            return [2, 4, 6, 1, 3, 5], [0.5, 0.125, 0.125, 0.125, 0.125, 0]
         else:
             return [], []
     def _predict(self, target_x, target_y, current_dot, angle_diff=0, min_rate=0.6):

@@ -89,8 +89,8 @@ class DiceVideoProcessor:
         dice_roi,region = self.__extract_dice(frame)
         angle = self.get_angle(frame)
         angle_diff = round(angle-90)
-        if angle_diff !=self.background_angle_diff:
-            print(f"角度{angle_diff}和背景图片的{self.background_angle_diff}不一样")
+        # if angle_diff !=self.background_angle_diff:
+        #     print(f"角度{angle_diff}和背景图片的{self.background_angle_diff}不一样")
         if dice_roi is not None:
             x1, y1, w1, h1 = region
             features = self._extract_features(dice_roi, x1 , y1 , w1 , h1 , dot)

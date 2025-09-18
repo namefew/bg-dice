@@ -79,8 +79,8 @@ class DiceServer:
         try:
             labels = [game.round_id,game.start_time.strftime("%Y-%m-%d %H:%M:%S"),game.last_game_result,game.result,game.seq_no]
             video_processor = DiceVideoProcessor(background=self.processor.background, logger=self.logger)
-            backgrounds = self.processor.background_history[-3:] if len(
-                self.processor.background_history) >3 else self.processor.background_history.copy()
+            backgrounds = self.processor.background_history[-2:] if len(
+                self.processor.background_history) >=2 else self.processor.background_history.copy()
             if self.processor.background is not None:
                 backgrounds.append(self.processor.background)
             self.logger.info(f"{game.seq_no}局保存特征 {len(input_frames)} X {len(output_frames)} X {len( backgrounds)} ...")
@@ -288,7 +288,7 @@ class DiceServer:
                     self.logger.warning(f"{game.to_string()} 视频还未开始")
                     return None
                 game.begin_frame = frame
-            future = self.processor.start_extract_frame(game.seq_no, count=6, step=2)
+            future = self.processor.start_extract_frame(game.seq_no, count=4, step=2)
             future.add_done_callback(lambda f: self._frame_extract_callback(game, f))
             if game.last_game_result is None:
                 dot, cf = await loop.run_in_executor(self.thread_pool, self.dot_cnn.predict_image, game.begin_frame)
@@ -370,7 +370,7 @@ class DiceServer:
 
             if game.frames is not None and len(game.frames) > 0:
                 # 异步执行帧提取和特征保存
-                end_frame_future = self.processor.start_extract_frame(game, count=6, step=2)
+                end_frame_future = self.processor.start_extract_frame(game, count=4, step=2)
                 end_frame_future.add_done_callback(lambda f: self._save_all_features_callback(game, f))
         else:
             self.logger.warning(f"未找到游戏：{data['body']['seqNo']}")

@@ -4,11 +4,62 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 import os
 import argparse
 import pickle
+
+
+class StandardScaler:
+    """标准化器，替代sklearn的StandardScaler"""
+
+    def __init__(self):
+        self.mean_ = None
+        self.scale_ = None
+
+    def fit(self, X):
+        """计算均值和标准差"""
+        self.mean_ = np.mean(X, axis=0)
+        self.scale_ = np.std(X, axis=0)
+        # 避免除零错误
+        self.scale_[self.scale_ == 0] = 1
+        return self
+
+    def transform(self, X):
+        """标准化数据"""
+        if self.mean_ is None or self.scale_ is None:
+            raise ValueError("Scaler has not been fitted yet.")
+        return (X - self.mean_) / self.scale_
+
+    def fit_transform(self, X):
+        """拟合并转换数据"""
+        return self.fit(X).transform(X)
+
+    def inverse_transform(self, X):
+        """反向标准化"""
+        if self.mean_ is None or self.scale_ is None:
+            raise ValueError("Scaler has not been fitted yet.")
+        return X * self.scale_ + self.mean_
+
+
+def train_test_split(X, y, test_size=0.2, random_state=None):
+    """数据集划分函数，替代sklearn的train_test_split"""
+    if random_state is not None:
+        np.random.seed(random_state)
+
+    n_samples = X.shape[0]
+    n_test = int(n_samples * test_size)
+    n_train = n_samples - n_test
+
+    # 创建随机索引
+    indices = np.random.permutation(n_samples)
+    train_indices = indices[:n_train]
+    test_indices = indices[n_train:]
+
+    # 分割数据
+    X_train, X_test = X[train_indices], X[test_indices]
+    y_train, y_test = y[train_indices], y[test_indices]
+
+    return X_train, X_test, y_train, y_test
 
 
 class FeatureSaver:
