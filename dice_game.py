@@ -85,9 +85,6 @@ class DiceGame:
                     exp = member.expectation(prediction_dict)
                     self.logger.info(f'{member.display_name} 期望：{exp}')
                     if exp >= min_exp:
-                    # the_odds = exp/(member.odds+1)
-                    # if the_odds >= 0.5:
-                        self.logger.info(f'{member.display_name} 期望：{exp}')
                         bets.append(DiceBet(member))
 
         return bets
