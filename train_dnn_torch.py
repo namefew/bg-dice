@@ -1,4 +1,6 @@
 # train_dnn_torch.py
+import threading
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -73,6 +75,7 @@ class FeatureSaver:
             'outputs': [],
             'labels': []
         }
+        self._lock = threading.Lock()
         self._ensure_directory_exists()
 
     def _ensure_directory_exists(self):
@@ -82,59 +85,61 @@ class FeatureSaver:
 
     def add_to_cache(self, input_features, output_features, labels):
         """将特征添加到缓存中，用于批量保存"""
-        try:
-            # 确保输入是numpy数组
-            input_features = np.array(input_features, dtype=np.float32)
-            output_features = np.array(output_features, dtype=np.float32)
-            labels = np.array(labels)
+        with self._lock:  # 使用线程锁保护临界区
+            try:
+                # 确保输入是numpy数组
+                input_features = np.array(input_features, dtype=np.float32)
+                output_features = np.array(output_features, dtype=np.float32)
+                labels = np.array(labels)
 
-            # 添加到缓存
-            self.cache['inputs'].append(input_features)
-            self.cache['outputs'].append(output_features)
-            self.cache['labels'].append(labels)
+                # 添加到缓存
+                self.cache['inputs'].append(input_features)
+                self.cache['outputs'].append(output_features)
+                self.cache['labels'].append(labels)
 
-            return True
-        except Exception as e:
-            print(f"Failed to add features to cache: {e}")
-            return False
+                return True
+            except Exception as e:
+                print(f"Failed to add features to cache: {e}")
+                return False
 
     def flush_cache(self):
         """将缓存中的所有特征一次性保存到文件"""
-        if not any(self.cache[key] for key in self.cache):
-            return True  # 缓存为空，直接返回
+        with self._lock:  # 使用线程锁保护临界区
+            if not any(self.cache[key] for key in self.cache):
+                return True  # 缓存为空，直接返回
 
-        try:
-            # 将缓存中的数据堆叠成数组
-            inputs_list = self.cache['inputs']
-            outputs_list = self.cache['outputs']
-            labels_list = self.cache['labels']
+            try:
+                # 将缓存中的数据堆叠成数组
+                inputs_list = self.cache['inputs']
+                outputs_list = self.cache['outputs']
+                labels_list = self.cache['labels']
 
-            if not inputs_list:
-                return True
+                if not inputs_list:
+                    return True
 
-            # 重塑输入数据以确保形状一致
-            reshaped_inputs = [inp.reshape(1, -1) if inp.ndim == 1 else inp for inp in inputs_list]
-            reshaped_outputs = [out.reshape(1, -1) if out.ndim == 1 else out for out in outputs_list]
-            reshaped_labels = [label.reshape(1, -1) if label.ndim == 1 else label for label in labels_list]
+                # 重塑输入数据以确保形状一致
+                reshaped_inputs = [inp.reshape(1, -1) if inp.ndim == 1 else inp for inp in inputs_list]
+                reshaped_outputs = [out.reshape(1, -1) if out.ndim == 1 else out for out in outputs_list]
+                reshaped_labels = [label.reshape(1, -1) if label.ndim == 1 else label for label in labels_list]
 
-            # 堆叠所有数据
-            all_inputs = np.vstack(reshaped_inputs)
-            all_outputs = np.vstack(reshaped_outputs)
-            all_labels = np.vstack(reshaped_labels)
+                # 堆叠所有数据
+                all_inputs = np.vstack(reshaped_inputs)
+                all_outputs = np.vstack(reshaped_outputs)
+                all_labels = np.vstack(reshaped_labels)
 
-            # 保存到文件
-            success = self._save_features_impl(all_inputs, all_outputs, all_labels)
+                # 保存到文件
+                success = self._save_features_impl(all_inputs, all_outputs, all_labels)
 
-            # 清空缓存
-            self.cache['inputs'].clear()
-            self.cache['outputs'].clear()
-            self.cache['labels'].clear()
+                # 清空缓存
+                self.cache['inputs'].clear()
+                self.cache['outputs'].clear()
+                self.cache['labels'].clear()
 
-            return success
+                return success
 
-        except Exception as e:
-            print(f"Failed to flush features cache: {e}")
-            return False
+            except Exception as e:
+                print(f"Failed to flush features cache: {e}")
+                return False
 
     def _save_features_impl(self, all_inputs, all_outputs, all_labels):
         """实际保存特征到文件的实现"""

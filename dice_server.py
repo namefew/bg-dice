@@ -3,6 +3,7 @@ import traceback
 from datetime import datetime
 from enum import IntEnum
 import concurrent.futures
+from msvcrt import locking
 from typing import List
 import os
 import numpy as np
@@ -62,6 +63,14 @@ class DiceServer:
         self.processor = DiceOnlineVideoProcessorNew(logger=logger)
         self.games: List[DiceGame] = []
 
+    async def latest_game(self):
+        async with self.lock:
+            if len(self.games)>0:
+                return self.games[-1]
+            return None
+    async def append_game(self,game: DiceGame):
+        async with self.lock:
+            self.games.append(game)
     async def close(self):
         """显式关闭资源"""
         if hasattr(self, 'thread_pool'):
@@ -74,7 +83,7 @@ class DiceServer:
             self.timeseries_storage.save_features(features, game)
             # self.logger.info(f"Saved time series features for game {game.seq_no}")
 
-    def save_all_features(self, game:DiceGame, input_frames, output_frames):
+    def _save_all_features(self, game:DiceGame, input_frames, output_frames):
         """保存所有游戏时间序列特征"""
         try:
             labels = [game.round_id,game.start_time.strftime("%Y-%m-%d %H:%M:%S"),game.last_game_result,game.result,game.seq_no]
@@ -105,6 +114,62 @@ class DiceServer:
                         train_dnn_torch.save_features_batch(input_features, output, labels)
             train_dnn_torch.flush_features_cache()
             self.logger.info(f"{game.seq_no}局保存特征完成,共{len(input_frames) * len(output_frames) * len(backgrounds)} 个")
+        except Exception as e:
+            self.logger.error(f"Error in save_all_features: {e}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+        finally:
+            game.frames = None
+
+    def save_all_features(self, game: DiceGame, input_frames, output_frames):
+        """保存所有游戏时间序列特征"""
+        try:
+            labels = [game.round_id, game.start_time.strftime("%Y-%m-%d %H:%M:%S"), game.last_game_result, game.result,
+                      game.seq_no]
+            backgrounds = self.processor.background_history[-2:] if len(
+                self.processor.background_history) >= 2 else self.processor.background_history.copy()
+            if self.processor.background is not None:
+                backgrounds.append(self.processor.background)
+            self.logger.info(
+                f"{game.seq_no}局保存特征 {len(input_frames)} X {len(output_frames)} X {len(backgrounds)} ...")
+
+            # 创建任务列表
+            tasks = []
+            for background in backgrounds:
+                video_processor = DiceVideoProcessor(background=background, logger=self.logger)
+                for i in range(len(input_frames)):
+                    for j in range(len(output_frames)):
+                        tasks.append((video_processor, input_frames[i], output_frames[j], labels.copy()))
+
+            # 使用线程池并行处理任务
+            def process_task(task):
+                video_processor, input_frame, output_frame, labels = task
+                # 复制video_processor以避免线程安全问题
+                vp_copy = DiceVideoProcessor(background=video_processor.background, logger=self.logger)
+                input_features = self.to_input_feature(game, vp_copy)
+                if input_features is None:
+                    return 0
+
+                output_features = vp_copy.detect_dice_feature(output_frame)
+                if output_features is None:
+                    return 0
+
+                output = np.array([
+                    output_features[0],  # x
+                    output_features[1],  # y
+                    output_features[2],  # w
+                    output_features[3],  # h
+                    game.result  # next_dot
+                ])
+                train_dnn_torch.save_features_batch(input_features, output, labels)
+                return 1
+
+            # 使用线程池执行并行处理
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                results = list(executor.map(process_task, tasks))
+
+            total_saved = sum(results)
+            train_dnn_torch.flush_features_cache()
+            self.logger.info(f"{game.seq_no}局保存特征完成,共{total_saved} 个")
         except Exception as e:
             self.logger.error(f"Error in save_all_features: {e}")
             self.logger.error(f"Traceback: {traceback.format_exc()}")
@@ -222,8 +287,17 @@ class DiceServer:
             self.messages[key] = timestamp
             return True
             
-    def find_game(self, seq_no):
-        return next((game for game in self.games if game.seq_no == seq_no), None)
+    async def find_game(self, seq_no, create_if_not_found=False):
+        async with self.lock:
+            the_game = next((game for game in self.games if game.seq_no == seq_no), None)
+            if the_game is None and create_if_not_found:
+                if self.games is not None and len(self.games)>0:
+                    latest = self.games[-1]
+                    if latest.seq_no<seq_no:
+                        round = f"{latest.round_id[:11]}{hex(int(latest.round_id[11:],16) + seq_no-latest.seq_no)[2:]}"
+                        the_game = DiceGame(round_id=round, seq_no=seq_no, table_id=latest.table_id)
+                        self.games.append(the_game)
+            return the_game
 
     async def handle_json_message(self, message, websocket):
         try:
@@ -254,7 +328,7 @@ class DiceServer:
     async def handle_game_stop_betting(self, data):
         # {"cmd":2,"cmdName":"GAME_CMD","action":7,"actionName":"STOP_BET_ACT","size":12,"ext":0,"body":{"tableID":"B21","seqNo":1761979}}
         if data['body']['tableID'] == self.table_id:
-            oldGame = self.find_game(data['body']['seqNo'])
+            oldGame = await self.find_game(data['body']['seqNo'],True)
             if oldGame is not None:
                 if oldGame.is_status(GameStatus.WAITING_RESULT):
                     return None
@@ -272,13 +346,13 @@ class DiceServer:
         serialNo = body['serialNo']
         if tableID != self.table_id:
             return None
-        oldGame = self.find_game(seqNo)
+        oldGame = await self.find_game(seqNo)
         if oldGame is None:
             game = DiceGame(round_id=serialNo, seq_no=seqNo, table_id=tableID)
-            self.games.append(game)
+            await self.append_game( game)
             # 异步执行耗时操作
             loop = asyncio.get_running_loop()
-            last_game = self.find_game(seqNo - 1)
+            last_game = await self.find_game(seqNo - 1)
             if last_game is not None:
                 game.last_game_result = last_game.result
                 game.begin_frame = last_game.end_frame
@@ -320,10 +394,7 @@ class DiceServer:
                         f"{game.to_string()} 推荐失败: {game.recommend} {game.recommend_confidence} < 阈值:{recommend_gate}")
             else:
                 self.logger.info(f"{game.to_string()} 推荐失败: 预测结果为空")
-            # 将帧提取也放到线程池中执行，避免阻塞事件循环
-
-        else:
-            self.logger.info(f"重复的消息{self.table_id}-{seqNo} {oldGame.to_string()}")
+        # 将帧提取也放到线程池中执行，避免阻塞事件循环
 
     def _frame_extract_callback(self, game, future):
         """帧提取完成的回调函数"""
@@ -337,7 +408,7 @@ class DiceServer:
         # {"cmd":2,"cmdName":"GAME_CMD","action":4,"actionName":"RESULT_ACT","size":20,"ext":6,"body":{"tableID":"B21","seqNo":1761979,"position":1,"count":1,"padding":0,"result":[4]}}
         if data['body']['tableID'] != self.table_id:
             return None
-        game = self.find_game(data['body']['seqNo'])
+        game = await self.find_game(data['body']['seqNo'],True)
         if game is not None:
             if game.is_status(GameStatus.HANDLE_RESULT):
                 return None
@@ -380,9 +451,7 @@ class DiceServer:
         #{"cmd":2,"cmdName":"GAME_CMD","action":35,"actionName":"BETTING_STAT_ACT","size":108,"ext":0,"body":{"type":6,"gameTypeName":"SPEED_SICBO","tableID":"B21","count":5,"playerTotal":0,"chipsTotal":0,"chips":[{"num":7,"type":1610612737,"betTypeName":"BIG","amt":3177.255997657776},{"num":2,"type":1610612738,"betTypeName":"SMALL","amt":16.170059949159622},{"num":0,"type":1610612740,"betTypeName":"ODD","amt":0},{"num":2,"type":1610612744,"betTypeName":"EVEN","amt":180},{"num":4,"type":1610612752,"betTypeName":"DICE","amt":417.72099912166595}]}}
         if data['body']['tableID'] != self.table_id:
             return None
-        if not self.games:
-            return None
-        game = self.games[-1]
+        game = await self.latest_game()
         if game is not None:
             chips = data['body']['chips']
             game.chips = chips
@@ -414,7 +483,8 @@ class DiceServer:
         max_val = 0
         min_val = 0
         win = 0
-        games_to_check = self.games.copy()
+        async with self.lock:
+            games_to_check = self.games.copy()
         for game in games_to_check:
             if game.recommend is not None:
                 all += 1

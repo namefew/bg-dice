@@ -1,8 +1,9 @@
 import asyncio
+import glob
 import os
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import cv2
 import numpy as np
@@ -108,8 +109,8 @@ class DiceOnlineVideoProcessorNew:
             # 检查文件修改时间
             file_mtime = os.path.getmtime(self.background_file)
             current_time = time.time()
-            # 如果文件在1小时内被修改过
-            if (current_time - file_mtime) <= 3600:  # 3600秒 = 1小时
+            # 如果文件在2小时内被修改过
+            if (current_time - file_mtime) <= 7200:  # 3600秒 = 1小时
                 try:
                     background = cv2.imread(self.background_file)
                     if background is not None:
@@ -123,7 +124,31 @@ class DiceOnlineVideoProcessorNew:
                     self.logger.error(f"Failed to load existing background: {e}")
             else:
                 self.logger.info("Existing background file is older than 1 hour, will calculate new background")
-
+        now = datetime.now()
+        # 计算2小时前的时间
+        two_hours_ago = now - timedelta(hours=2)
+        # 查找images目录下符合命名规则的背景图片
+        background_pattern = os.path.join("images", "background_*.jpg")
+        background_files = glob.glob(background_pattern)
+        # 筛选出最近2小时内修改的文件
+        recent_backgrounds = []
+        for file_path in background_files:
+            # 获取文件的修改时间
+            mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+            # 如果修改时间在2小时内，则加入列表
+            if mod_time > two_hours_ago:
+                recent_backgrounds.append((file_path, mod_time))
+        # 按修改时间排序，最新的在前
+        recent_backgrounds.sort(key=lambda x: x[1], reverse=True)
+        loaded = 0
+        for file_path, mod_time in recent_backgrounds:
+            if loaded >= 4:
+                break
+            # 构造目标文件名
+            background = cv2.imread(file_path)
+            if background is not None:
+                self.background = background
+                self.background_history.insert(0, background)
     def add_next_frame_callback(self, callback):
         """添加 next_frame 回调函数"""
         if callback not in self.next_frame_callbacks:
@@ -264,18 +289,6 @@ class DiceOnlineVideoProcessorNew:
             callback(frame)
         return frame.copy()
 
-    def save_background_image(self, background):
-        """保存背景图片到固定文件"""
-        try:
-            cv2.imwrite(self.background_file, background)
-            self.logger.info(f"Background saved to {self.background_file}")
-            current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            background_path = f"images/background_{self.background_angle_diff}_{current_time}.jpg"
-            cv2.imwrite(background_path, background)
-            self.logger.info(f"Background also saved to {background_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to save background image: {e}")
-
     def calculate_background(self, frame):
         if frame is None:  # 新增空帧检查
             self.logger.warning("收到空帧，跳过背景计算")
@@ -309,6 +322,9 @@ class DiceOnlineVideoProcessorNew:
             background = cv2.medianBlur(background, 5)
             if self.background is not None:
                 self.background_history.append(self.background)
+                current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                background_path = f"images/background_{self.background_angle_diff}_{current_time}.jpg"
+                cv2.imwrite(background_path, self.background)
                 if len(self.background_history)>10:
                     self.background_history.pop(0)
             self.background = background
@@ -317,9 +333,9 @@ class DiceOnlineVideoProcessorNew:
                 sum_angles += self.get_angle(f)
             avg_angle = sum_angles / len(self.background_frames)
             self.background_angle_diff = round(avg_angle - 90)
-
             # 保存背景到固定文件
-            self.save_background_image(background)
+            cv2.imwrite(self.background_file, background)
+            self.logger.info(f"Background saved to {self.background_file}")
 
             self.background_frames.clear()
             self.logger.info("背景计算完成")
